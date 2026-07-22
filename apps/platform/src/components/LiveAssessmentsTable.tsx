@@ -24,6 +24,11 @@ import Link from 'next/link';
 import type { BackendAssessment } from '@/lib/real-api-client';
 import { EmptyState } from './EmptyState';
 import { IconClipboard } from './Icons';
+function formatPreviewDate(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
 
 interface LiveAssessmentsTableProps {
   items: BackendAssessment[];
@@ -76,7 +81,7 @@ export function LiveAssessmentsTable({ items, compact = false }: LiveAssessments
               {!compact && (
                 <>
                   <td className="px-5 py-3.5 text-gray-600">{item.riskLevel ?? '—'}</td>
-                  <td className="px-5 py-3.5 text-gray-400 text-xs">{item.createdAt.slice(0, 10)}</td>
+                  <td className="px-5 py-3.5 text-gray-400 text-xs">{formatPreviewDate(item.createdAt)}</td>
                 </>
               )}
             </tr>

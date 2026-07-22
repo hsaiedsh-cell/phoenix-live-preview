@@ -3,6 +3,11 @@ import type { AuditRecord } from '@phoenix/core';
 import { ownerNameForUserId } from '@/lib/mock-ids';
 import { EmptyState } from './EmptyState';
 import { IconLock } from './Icons';
+function formatPreviewDate(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
 
 function summarizeChanges(changes: Record<string, [unknown, unknown]>): string {
   const entries = Object.entries(changes);
@@ -36,7 +41,7 @@ export function AuditTrailPreview({ records }: AuditTrailPreviewProps) {
         <div key={record.id} className="rounded-lg border border-gray-200 bg-white p-4">
           <div className="flex items-start justify-between gap-3 mb-1.5">
             <p className="text-sm font-semibold text-phx-navy">{record.action}</p>
-            <span className="text-[11px] text-gray-400 whitespace-nowrap">{record.createdAt.slice(0, 10)}</span>
+            <span className="text-[11px] text-gray-400 whitespace-nowrap">{formatPreviewDate(record.createdAt)}</span>
           </div>
           <p className="text-xs text-gray-500 mb-2">{summarizeChanges(record.changes)}</p>
           <div className="flex items-center gap-2 text-[11px] text-gray-400">

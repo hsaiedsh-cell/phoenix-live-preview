@@ -2,6 +2,11 @@ import React from 'react';
 import type { EvidenceItem } from '@phoenix/core';
 import { ownerNameForUserId } from '@/lib/mock-ids';
 import { IconEvidence } from './Icons';
+function formatPreviewDate(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
 
 const TYPE_LABELS: Record<string, string> = {
   Document: 'Document',
@@ -49,7 +54,7 @@ export function EvidenceCard({ evidence }: EvidenceCardProps) {
       <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-gray-400">
         <span className="font-medium text-gray-500">{TYPE_LABELS[evidence.type] ?? evidence.type}</span>
         <span>Uploaded by {ownerNameForUserId(evidence.uploadedByUserId)}</span>
-        <span>{evidence.createdAt.slice(0, 10)}</span>
+        <span>{formatPreviewDate(evidence.createdAt)}</span>
       </div>
     </div>
   );

@@ -25,6 +25,11 @@
 import type { BackendActivityItem, BackendAuditRecord } from '@/lib/real-api-client';
 import { EmptyState } from './EmptyState';
 import { IconHistory, IconLock } from './Icons';
+function formatPreviewDate(value: string | Date | null | undefined): string {
+  if (!value) return '—';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value).slice(0, 10);
+}
 
 export function LiveActivityList({ items }: { items: BackendActivityItem[] }) {
   if (items.length === 0) {
@@ -40,7 +45,7 @@ export function LiveActivityList({ items }: { items: BackendActivityItem[] }) {
           <div className="flex-1 pb-3 border-b border-gray-100 last:border-b-0 last:pb-0">
             <p className="text-sm text-phx-navy">{item.summary}</p>
             <p className="text-xs text-gray-400 mt-0.5">
-              {item.actorDisplayName} · {item.createdAt.slice(0, 10)}
+              {item.actorDisplayName} · {formatPreviewDate(item.createdAt)}
               {item.relatedEntityType ? ` · ${item.relatedEntityType}` : ''}
             </p>
           </div>
@@ -66,7 +71,7 @@ export function LiveAuditList({ items }: { items: BackendAuditRecord[] }) {
         <div key={record.id} className="rounded-lg border border-gray-200 bg-white p-4">
           <div className="flex items-start justify-between gap-3 mb-1.5">
             <p className="text-sm font-semibold text-phx-navy">{record.action}</p>
-            <span className="text-[11px] text-gray-400 whitespace-nowrap">{record.createdAt.slice(0, 10)}</span>
+            <span className="text-[11px] text-gray-400 whitespace-nowrap">{formatPreviewDate(record.createdAt)}</span>
           </div>
           <div className="flex items-center gap-2 text-[11px] text-gray-400">
             <span>{record.entityType}</span>

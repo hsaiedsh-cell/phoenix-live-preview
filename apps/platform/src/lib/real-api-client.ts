@@ -489,6 +489,51 @@ export interface BackendScore {
   derivedSignals: BackendDerivedSignal[];
 }
 
+/**
+ * One row of a live passport list (PHX-PASSPORTS-001, vercel-supabase-preview
+ * mode only — mirrors pbrs_passports joined with assets and, if present, its
+ * most recent non-deleted pbrs_certifications row). There is no real-dev /
+ * production-auth counterpart yet: apps/backend/src/routes/passports.ts is
+ * still a PHX-BACKEND-001 stub (every route returns 501 Not Implemented), so
+ * this type is only ever populated by previewGetPassports() in
+ * preview-api-client.server.ts. Kept here, not in that file, for the same
+ * reason as every other Backend* type — a single shared definition if a
+ * future sprint adds a real backend passports endpoint.
+ *
+ * `certificationTier` / `certificationStatus` are null when the passport has
+ * no certification row at all (pending certification) — this is NOT the
+ * same as a 'Not Eligible'/'Expired' status, which the caller can also see
+ * via a non-null `certificationStatus`. `certificationLevel` (PBRS
+ * Foundation/Practitioner/Enterprise) is intentionally NOT included here —
+ * it is a derived, presentation-layer value with a single source of truth
+ * in lib/certification-levels.ts's certificationLevelFromScore(scoreSnapshot),
+ * not a stored column, so callers derive it from `scoreSnapshot` rather than
+ * this read layer duplicating that logic.
+ */
+export interface BackendPassport {
+  id: string;
+  passportId: string;
+  assetId: string;
+  assetName: string;
+  assessmentId: string;
+  /** PassportStatus: 'Not Issued' | 'Issued' | 'Active' | 'Expired' | 'Revoked'. */
+  status: string;
+  scoreSnapshot: number;
+  /** Constrained at the DB layer to 'A' | 'B' | 'C' | 'Hold' (chk_pbrs_passports_grade). */
+  gradeSnapshot: string;
+  validFrom: string | null;
+  validUntil: string | null;
+  recordHash: string;
+  issuedAt: string | null;
+  revokedAt: string | null;
+  /** CertificationTier ('Platinum'|'Gold'|'Silver'|'Bronze'), or null if no certification row exists yet. */
+  certificationTier: string | null;
+  /** CertificationStatus ('Certified'|'Expiring Soon'|'Expired'|'Eligible'|'Not Eligible'), or null if no certification row exists yet. */
+  certificationStatus: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Read functions have moved to real-api-client.server.ts (Server
 // Component / server-only reads, used by platform-data-source.ts) and

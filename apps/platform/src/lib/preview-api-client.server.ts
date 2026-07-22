@@ -54,6 +54,7 @@ import {
   type BackendScore,
   type BackendActivityItem,
   type BackendAuditRecord,
+  type BackendPassport,
 } from './real-api-client';
 
 // ---------------------------------------------------------------------------
@@ -524,6 +525,116 @@ export async function previewGetWorkspaceAuditRecords(
     changes: row.changes,
     context: row.context,
     createdAt: row.created_at,
+  }));
+
+  return { items, total: items.length, cursor: null };
+}
+
+// ---------------------------------------------------------------------------
+// Passports — PHX-PASSPORTS-001. No backend repository exists to mirror
+// (apps/backend/src/routes/passports.ts is still a PHX-BACKEND-001 stub —
+// every route returns 501), so this queries pbrs_passports directly against
+// the documented schema (apps/backend/db/migrations/0001_initial_schema.sql).
+//
+// Permission: there is no dedicated 'passport.read' entry in the permission
+// matrix (lib/auth/preview-auth.server.ts's Permission type only has
+// 'passport.issue' for the write path). Passports are read-only artifacts
+// derived from an already-readable Assessment, so this deliberately gates on
+// 'assessment.read' — the same permission every role that can view an
+// assessment already holds (Owner/Admin/Reviewer/Contributor/Viewer/
+// Auditor). Documented here as an explicit, deliberate assumption per this
+// sprint's task brief ("If a migration is required, document it explicitly" /
+// "any deliberate deviation... must be documented") — a future sprint adding
+// a real backend passports endpoint should confirm this matches whatever
+// permission that endpoint ends up enforcing.
+//
+// Certification join: LEFT JOIN LATERAL picks the single most recent
+// non-deleted pbrs_certifications row for the passport, if any — a passport
+// with no certification row at all is "Pending Certification" (mirrors
+// sample-data.ts's mock PhoenixPassport.certificationStatus semantics).
+// `certificationLevel` (PBRS Foundation/Practitioner/Enterprise) is NOT
+// computed here — see BackendPassport's doc comment; callers derive it from
+// `scoreSnapshot` via certification-levels.ts's certificationLevelFromScore().
+// ---------------------------------------------------------------------------
+
+export async function previewGetPassports(workspaceId: string): Promise<BackendPaginatedResult<BackendPassport>> {
+  if (!(await workspaceExists(workspaceId))) {
+    throw new RealApiError(404, 'NOT_FOUND', 'Workspace not found.');
+  }
+  await requirePreviewPermission(workspaceId, 'assessment.read');
+
+  const pool = getPreviewDatabasePool();
+  const result = await pool.query<{
+    id: string;
+    passport_id: string;
+    asset_id: string;
+    asset_name: string;
+    assessment_id: string;
+    status: string;
+    score_snapshot: string;
+    grade_snapshot: string;
+    valid_from: string | null;
+    valid_until: string | null;
+    record_hash: string;
+    issued_at: string | null;
+    revoked_at: string | null;
+    created_at: string;
+    updated_at: string;
+    certification_tier: string | null;
+    certification_status: string | null;
+  }>(
+    `SELECT
+       p.id                  AS id,
+       p.passport_id         AS passport_id,
+       p.asset_id            AS asset_id,
+       ast.name              AS asset_name,
+       p.assessment_id       AS assessment_id,
+       p.status              AS status,
+       p.score_snapshot      AS score_snapshot,
+       p.grade_snapshot      AS grade_snapshot,
+       p.valid_from          AS valid_from,
+       p.valid_until         AS valid_until,
+       p.record_hash         AS record_hash,
+       p.issued_at           AS issued_at,
+       p.revoked_at          AS revoked_at,
+       p.created_at          AS created_at,
+       p.updated_at          AS updated_at,
+       cert.tier             AS certification_tier,
+       cert.status           AS certification_status
+     FROM pbrs_passports p
+     JOIN assets ast ON ast.id = p.asset_id
+     LEFT JOIN LATERAL (
+       SELECT c.tier, c.status
+       FROM pbrs_certifications c
+       WHERE c.passport_id = p.id AND c.deleted_at IS NULL
+       ORDER BY c.created_at DESC
+       LIMIT 1
+     ) cert ON true
+     WHERE p.workspace_id = $1
+       AND p.deleted_at IS NULL
+     ORDER BY p.created_at DESC
+     LIMIT 100`,
+    [workspaceId]
+  );
+
+  const items: BackendPassport[] = result.rows.map((row) => ({
+    id: row.id,
+    passportId: row.passport_id,
+    assetId: row.asset_id,
+    assetName: row.asset_name,
+    assessmentId: row.assessment_id,
+    status: row.status,
+    scoreSnapshot: Number(row.score_snapshot),
+    gradeSnapshot: row.grade_snapshot,
+    validFrom: row.valid_from,
+    validUntil: row.valid_until,
+    recordHash: row.record_hash,
+    issuedAt: row.issued_at,
+    revokedAt: row.revoked_at,
+    certificationTier: row.certification_tier,
+    certificationStatus: row.certification_status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   }));
 
   return { items, total: items.length, cursor: null };

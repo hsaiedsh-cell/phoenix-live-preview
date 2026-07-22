@@ -83,6 +83,7 @@ import {
   previewGetAssessmentScore,
   previewGetWorkspaceActivity,
   previewGetWorkspaceAuditRecords,
+  previewGetPassports,
 } from './preview-api-client.server';
 import {
   RealApiError,
@@ -94,6 +95,7 @@ import {
   type BackendScore,
   type BackendActivityItem,
   type BackendAuditRecord,
+  type BackendPassport,
 } from './real-api-client';
 
 /** Which runtime mode is active. Re-exported from api-config.ts's PhoenixApiMode for call-site clarity — same four values. */
@@ -358,6 +360,42 @@ export async function loadSettingsActivityAuditData(): Promise<LiveResult<LiveSe
     // audit.read is enforced per-workspace by the backend — a 403 here
     // is expected for e.g. a Viewer/Contributor identity and must
     // render as permission-denied, never as fake/empty data.
+    return errorToLiveResult(err, config.mode);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Passports list (PHX-PASSPORTS-001) — vercel-supabase-preview mode only.
+// There is no real-dev / production-auth branch here (unlike every other
+// function in this file): apps/backend/src/routes/passports.ts is still a
+// PHX-BACKEND-001 stub (every route 501s), so real-dev/production-auth
+// simply have no live passport data source to call yet. Those two modes
+// (and 'real-disabled') therefore return 'mock' here deliberately, NOT
+// 'not-wired' — /passports/page.tsx keeps rendering its existing
+// mock-backed view for every mode except vercel-supabase-preview, exactly
+// as it did before this sprint. This is a narrower mock/live boundary than
+// every other load*Data function above (which all treat real-dev/
+// production-auth as live-capable) and is called out explicitly here so a
+// future sprint adding a real backend passports endpoint knows to widen it.
+// ---------------------------------------------------------------------------
+
+export interface LivePassportsListData {
+  workspaceId: string;
+  items: BackendPassport[];
+  total: number;
+}
+
+export async function loadPassportsListData(): Promise<LiveResult<LivePassportsListData>> {
+  const config = getPhoenixApiConfig();
+  if (config.mode !== 'vercel-supabase-preview') return mockResult(config.mode);
+
+  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
+
+  try {
+    const { items, total } = await previewGetPassports(workspaceId);
+    return { status: 'live', mode: config.mode, data: { workspaceId, items, total } };
+  } catch (err) {
     return errorToLiveResult(err, config.mode);
   }
 }

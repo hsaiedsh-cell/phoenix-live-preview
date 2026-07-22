@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { PassportCard } from '@/components/PassportCard';
 import { EmptyState } from '@/components/EmptyState';

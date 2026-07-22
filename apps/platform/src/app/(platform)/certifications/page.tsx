@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { CertificationCard } from '@/components/CertificationCard';
 import { AssessmentTable } from '@/components/AssessmentTable';

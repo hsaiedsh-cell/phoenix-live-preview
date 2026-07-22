@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { NewAssessmentWizard } from '@/components/NewAssessmentWizard';
 import { RoleGate } from '@/components/RoleGate';

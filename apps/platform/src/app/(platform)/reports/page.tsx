@@ -1,3 +1,5 @@
+export const dynamic = 'force-dynamic';
+
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { ReportCard } from '@/components/ReportCard';
 import { PreviewOnlyNotice } from '@/components/DataStatePanel';

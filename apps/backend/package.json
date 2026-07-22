@@ -1,0 +1,38 @@
+{
+  "name": "@phoenix/backend",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Phoenix backend foundation — health/version/readiness API, local PostgreSQL client, raw-SQL migration runner, dev seed data, read-only workspace/assessment endpoints, request validation/error hardening, assessment/evidence write endpoints, permission boundary, ownership/audit logging, activity/audit read endpoints, production auth preparation, and hosted-auth (oidc-jwt) production token verification. PHX-BACKEND-001..009 + PHX-AUTH-002.",
+  "main": "dist/index.js",
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc -p tsconfig.json",
+    "type-check": "tsc --noEmit",
+    "lint": "eslint \"src/**/*.ts\"",
+    "start": "node dist/index.js",
+    "db:migrate": "node dist/db/migrate.js",
+    "db:migrate:dev": "tsx src/db/migrate.ts",
+    "db:smoke": "node dist/db/smoke.js",
+    "db:smoke:dev": "tsx src/db/smoke.ts",
+    "db:seed": "node dist/db/seed.js",
+    "db:seed:dev": "tsx src/db/seed.ts",
+    "auth:test-jwks": "node scripts/auth-test-jwks.mjs",
+    "auth:test-token": "node scripts/auth-test-token.mjs"
+  },
+  "dependencies": {
+    "express": "^4.19.2",
+    "jose": "^5.9.6",
+    "pg": "^8.13.1",
+    "zod": "^3.25.76"
+  },
+  "devDependencies": {
+    "@types/express": "^4.17.21",
+    "@types/node": "^20.0.0",
+    "@types/pg": "^8.11.10",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.0.0"
+  }
+}

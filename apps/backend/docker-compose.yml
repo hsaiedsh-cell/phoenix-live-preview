@@ -1,0 +1,33 @@
+# ============================================================
+# Phoenix Backend — Local PostgreSQL (development only)
+# PHX-BACKEND-002 — Local PostgreSQL + Migration Execution
+# ------------------------------------------------------------
+# This file provisions a LOCAL, DEVELOPMENT-ONLY PostgreSQL instance.
+# The credentials below are intentionally simple, publicly visible in
+# this repository, and MUST NEVER be used outside a developer's own
+# machine. There is no staging/production equivalent of this file —
+# production database provisioning and credentials are a separate,
+# future decision (see docs/backend/PHX_BACKEND_002_IMPLEMENTATION_REPORT.md).
+# ============================================================
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: phoenix-postgres
+    environment:
+      # --- LOCAL/DEV ONLY — not a real secret, do not reuse anywhere. ---
+      POSTGRES_USER: phoenix
+      POSTGRES_PASSWORD: phoenix_dev_password
+      POSTGRES_DB: phoenix_dev
+    ports:
+      - '5432:5432'
+    volumes:
+      - phoenix_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U phoenix -d phoenix_dev']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+volumes:
+  phoenix_postgres_data:

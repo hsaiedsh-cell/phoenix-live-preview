@@ -1,0 +1,8 @@
+<!-- Favicon asset: rendered standalone by the browser (no access to page CSS
+     variables), so colors are intentionally literal here. Values are sourced
+     from the canonical tokens in @phoenix/design-system (navy #0C1929 / cyan #03A7C7).
+     If brand colors change, update tokens.css and this file together. -->
+<svg width="32" height="32" viewBox="0 0 1731 1978" xmlns="http://www.w3.org/2000/svg">
+  <path d="M154 130L1259 130L1602 473V1015L1259 1358H639V1978H154V1258L639 773H1136L1259 1015L1136 1258H639V773L154 1258V130Z" fill="#0C1929" fill-rule="evenodd"/>
+  <rect x="154" y="1633" width="345" height="345" fill="#03A7C7"/>
+</svg>

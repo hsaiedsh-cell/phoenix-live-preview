@@ -1,0 +1,158 @@
+# Phoenix Release Notes — PHX-WEB-003
+
+**Release label:** PHX-WEB-003 (Staging-Ready Build)
+**Task ID:** PHX-DEPLOY-001
+**Date:** 2026-07-06
+**Prepared by:** Lead DevOps Engineer / Platform Release Manager (Claude)
+
+---
+
+## Completed Scope
+
+This release focused exclusively on build verification, deployment
+readiness, and release packaging for the existing MVP Launch Candidate.
+No redesign, content rewrite, PBRS model change, or monorepo rebuild was
+performed, per the task brief.
+
+1. **Build integrity verified.** Ran `pnpm install`, `pnpm type-check`,
+   `pnpm lint`, and `pnpm build` across all three apps
+   (`@phoenix/website`, `@phoenix/platform`, `@phoenix/dashboard`). All
+   four passed cleanly with **zero code fixes required** for
+   TypeScript, ESLint, or the Next.js build itself. See
+   `BUILD_REPORT.md` for full command output.
+
+2. **`@phoenix/analytics` placeholder package added.** The package was
+   missing from `packages/`. Added as a clean, vendor-agnostic shell
+   exporting `trackEvent()`, `identifyUser()`, and an `AnalyticsEvent`
+   type (plus a supporting `AnalyticsUser` type), matching the existing
+   package conventions (`package.json` + `src/index.ts` + `README.md`,
+   no `tsconfig.json` at the package level, consistent with
+   `packages/config` and `packages/core`). No analytics vendor is
+   integrated — all functions are no-ops that log in non-production
+   environments only.
+
+3. **Font loading normalized for production.** The Google Fonts
+   `@import` in all three apps' `globals.css` was placed *after* the
+   `@tailwind base/components/utilities` directives, which produces a
+   CSS import-order warning (an `@import` must precede all other
+   statements, including `@tailwind` directives, per the CSS
+   specification). Fixed by moving the `@import url('https://fonts
+   .googleapis.com/...')` line to sit directly after the existing
+   `@import '@phoenix/design-system/tokens.css';` line, before any
+   `@tailwind` directive, in all three apps.
+
+   **Note on approach:** `next/font/google` (the preferred option in
+   the task brief) was attempted first, but the build-time font fetch
+   to `fonts.googleapis.com` was blocked by this verification
+   environment's network egress rules, causing `pnpm build` to fail
+   with `NextFontError`. Since a genuine pass/fail could not be
+   verified for that approach in this environment, it was reverted in
+   favor of the explicitly-approved fallback: reordering the existing
+   CSS `@import`. This was verified to build successfully. Adopting
+   `next/font/google` remains a reasonable follow-up once it can be
+   verified in an environment with unrestricted access to Google Fonts
+   (e.g. the actual Vercel build environment, which does not have this
+   restriction).
+
+4. **Deployment documentation added.** `docs/DEPLOYMENT_GUIDE.md`
+   covers project structure, the `apps/website` deploy target, install/
+   build commands, output expectations, environment variables, a
+   staging URL placeholder, the `phoenixops.ai` production domain, and
+   post-deployment smoke test steps.
+
+5. **`.env.example` added** at the repo root with
+   `NEXT_PUBLIC_SITE_URL` and `NEXT_PUBLIC_CONTACT_EMAIL` placeholders,
+   no secrets.
+
+6. **`docs/LAUNCH_QA_CHECKLIST.md` updated** — only items actually
+   verified during this task were checked off (build checklist items,
+   the font-loading fix, and a repo-wide hardcoded-hex-value grep).
+   Items requiring browser-based visual QA, accessibility testing,
+   responsive testing, or an actual deployment were left unchecked,
+   with a note added to the top of the checklist documenting the scope
+   of this verification pass.
+
+---
+
+## Known Limitations
+
+- **`siteConfig` does not yet read the new environment variables.**
+  `packages/config/src/index.ts` hardcodes `url` and `email` rather
+  than reading `NEXT_PUBLIC_SITE_URL` / `NEXT_PUBLIC_CONTACT_EMAIL` at
+  runtime. The `.env.example` values match the current hardcoded
+  defaults, so behavior is unaffected today, but the env vars are not
+  yet functionally wired in. Recommended as follow-up (see below).
+- **`next/font/google` could not be verified in this environment**
+  due to network egress restrictions on `fonts.googleapis.com`. The
+  fallback CSS-import-ordering fix was used instead and is verified
+  working. Revisiting `next/font/google` on Vercel (or any environment
+  with normal internet access) is a reasonable follow-up but is not
+  required for this release.
+- **No browser-based visual QA, accessibility audit, or responsive
+  testing was performed** as part of this task — scope was build
+  verification and deployment packaging only. See the updated
+  `LAUNCH_QA_CHECKLIST.md` for exactly what remains unverified.
+- **No actual deployment to Vercel was performed** as part of this
+  task. `DEPLOYMENT_GUIDE.md` documents the process; execution is a
+  follow-up step outside this container/environment.
+- **Lockfile regeneration on install.** The committed
+  `pnpm-lock.yaml` was generated by a different pnpm major version than
+  the one used for this verification pass (pnpm 8.15.9). `pnpm
+  install` printed a "broken lockfile" warning and regenerated it
+  in-place rather than failing. This did not affect the result (install
+  still completed and all resolved package versions matched the
+  existing dependency ranges), but it's worth pinning a specific pnpm
+  version (e.g. via `packageManager` in the root `package.json` or a
+  Corepack pin) so CI/CD and local environments resolve the lockfile
+  identically.
+
+---
+
+## Build Status
+
+| Command | Result |
+|---|---|
+| `pnpm install` | ✅ Pass (lockfile regenerated — see Known Limitations) |
+| `pnpm type-check` | ✅ Pass — 0 errors, all 3 apps |
+| `pnpm lint` | ✅ Pass — 0 warnings/errors, all 3 apps |
+| `pnpm build` | ✅ Pass — all 3 apps, all routes static |
+
+Full command output is in `BUILD_REPORT.md`.
+
+---
+
+## Deployment Readiness
+
+`apps/website` is ready for staging deployment to Vercel following
+`docs/DEPLOYMENT_GUIDE.md`. `apps/platform` and `apps/dashboard` remain
+`noindex` shells and should only be deployed to non-public, internal
+preview environments if deployed at all.
+
+This release is **staging-ready**, not production-promoted — production
+promotion should follow a completed pass of the remaining unchecked items
+in `LAUNCH_QA_CHECKLIST.md` plus a live post-deployment smoke test per
+`DEPLOYMENT_GUIDE.md` §8.
+
+---
+
+## Next Recommended Sprint
+
+1. Wire `@phoenix/config`'s `siteConfig.url` / `siteConfig.email` to
+   actually read `NEXT_PUBLIC_SITE_URL` / `NEXT_PUBLIC_CONTACT_EMAIL`
+   at build/runtime, with the current hardcoded values as fallback
+   defaults.
+2. Re-attempt `next/font/google` for Inter in an environment with
+   unrestricted access to Google Fonts (e.g. directly on Vercel) as a
+   performance/reliability improvement over the CDN `@import`
+   approach — this would remove the runtime dependency on
+   `fonts.googleapis.com` and improve font-loading performance
+   (no external round-trip, automatic self-hosting/subsetting).
+3. Complete a full manual pass of `LAUNCH_QA_CHECKLIST.md` sections
+   1–6 and 8 (routes, SEO, accessibility, responsive, content, brand,
+   deployment) ahead of the first production promotion.
+4. Pin the pnpm version used across local/CI environments (e.g.
+   `"packageManager": "pnpm@8.15.9"` in the root `package.json`, or a
+   Corepack pin) to avoid lockfile-format drift.
+5. Decide on and wire up a real analytics vendor behind the
+   `@phoenix/analytics` placeholder contract (`trackEvent` /
+   `identifyUser`) once one is selected.

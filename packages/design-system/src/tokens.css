@@ -1,0 +1,37 @@
+/* ============================================================
+   @phoenix/design-system — CSS Custom Properties
+   Canonical brand tokens, mirrored 1:1 from ./index.ts `colors`.
+   Values are expressed as "R G B" triples so Tailwind can apply
+   opacity modifiers (e.g. bg-phx-cyan/10) via rgb(var(...) / <alpha>).
+   This is the single source of truth for brand colors across every
+   app and package. Do not hardcode hex values elsewhere — consume
+   these variables (directly, or via the Tailwind phx-* color scale).
+   ============================================================ */
+
+:root {
+  /* Primary — Navy */
+  --phx-navy-rgb: 12 25 41;           /* #0C1929 */
+  --phx-navy-light-rgb: 19 34 56;     /* #132238 */
+  --phx-navy-mid-rgb: 26 45 71;       /* #1A2D47 */
+  --phx-navy-surface-rgb: 15 30 48;   /* #0F1E30 */
+
+  /* Accent — Cyan */
+  --phx-cyan-rgb: 3 167 199;          /* #03A7C7 */
+  --phx-cyan-light-rgb: 5 200 237;    /* #05C8ED */
+  --phx-cyan-dark-rgb: 2 139 166;     /* #028BA6 */
+
+  /* Neutral surface */
+  --phx-surface-rgb: 248 249 250;     /* #F8F9FA */
+  --phx-white-rgb: 255 255 255;       /* #FFFFFF */
+
+  /* Convenience: direct var() usage (SVG fills, inline styles, etc.) */
+  --phx-navy: rgb(var(--phx-navy-rgb));
+  --phx-navy-light: rgb(var(--phx-navy-light-rgb));
+  --phx-navy-mid: rgb(var(--phx-navy-mid-rgb));
+  --phx-navy-surface: rgb(var(--phx-navy-surface-rgb));
+  --phx-cyan: rgb(var(--phx-cyan-rgb));
+  --phx-cyan-light: rgb(var(--phx-cyan-light-rgb));
+  --phx-cyan-dark: rgb(var(--phx-cyan-dark-rgb));
+  --phx-surface: rgb(var(--phx-surface-rgb));
+  --phx-white: rgb(var(--phx-white-rgb));
+}

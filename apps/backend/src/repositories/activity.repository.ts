@@ -79,7 +79,12 @@ export type ActivityType =
   | 'AssessmentSubmitted'
   | 'EvidenceAdded'
   | 'EvidenceUpdated'
-  | 'EvidenceDeleted';
+  | 'EvidenceDeleted'
+  // PHX-REPORTS-003: matches the `ReportRequested` system event named
+  // explicitly in docs/platform/DATA_LIFECYCLE_PHX_PLATFORM_002.md §5's
+  // Report Lifecycle table (Requested state, "System event" column),
+  // not an invented name.
+  | 'ReportRequested';
 
 export interface RecordActivityInput {
   workspaceId: string;

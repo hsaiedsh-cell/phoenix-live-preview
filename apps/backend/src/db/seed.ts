@@ -54,6 +54,12 @@ async function logSummary(pool: ReturnType<typeof getDatabasePool>): Promise<voi
     'pbrs_passports',
     'activity_logs',
     'audit_records',
+    // PHX-REPORTS-003: report_templates is now seeded (2 rows); reports
+    // has no seed rows (POST /api/workspaces/:workspaceId/reports is
+    // the only way rows land there), included for completeness/QA
+    // visibility.
+    'report_templates',
+    'reports',
   ];
 
   for (const table of tables) {

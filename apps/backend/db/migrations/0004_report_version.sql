@@ -1,0 +1,42 @@
+-- ============================================================
+-- Phoenix Backend — Migration 0004: Report Version
+-- PHX-REPORTS-003-R1 — Report Request API & State Model (correction)
+-- ------------------------------------------------------------
+-- R0 omitted a `version` column entirely, reasoning that no such
+-- column existed in the pre-existing schema or in @phoenix/core's
+-- Report contract. ChatGPT architecture/QA review correctly rejected
+-- that reasoning: PHX-REPORTS-002's approved architecture explicitly
+-- proposed `reports.report_version INTEGER NOT NULL DEFAULT 1`, and
+-- the PHX-REPORTS-003 execution brief explicitly required version in
+-- the minimum persisted state, in validation, and in the API
+-- response. The absence of this column from the pre-existing baseline
+-- schema was not, on its own, justification for omitting it — the
+-- brief's "minimum required schema extension" is precisely this
+-- column. This migration adds it.
+--
+-- Column name is `report_version` (not `version`) to avoid any
+-- ambiguity with Postgres's reserved-adjacent conventions and to
+-- match the exact column name the approved architecture specified
+-- verbatim. It is mapped to the API/contract field `version` at the
+-- application boundary — see repositories/reports.repository.ts's
+-- mapReportRow() and routes/reports.ts.
+--
+-- NOT NULL DEFAULT 1, exactly as specified. The application layer
+-- never includes report_version in its INSERT column list (see
+-- createReportRequest() in reports.repository.ts) — every row this
+-- sprint's code creates gets version 1 purely from this column
+-- default, never from a value the client could supply or influence.
+-- validation/schemas/report.schemas.ts's CreateReportRequestBodySchema
+-- is `.strict()`, so a client that attempts to send a `version` field
+-- in the request body gets a 400 VALIDATION_ERROR (unrecognized key)
+-- rather than that value being silently accepted, silently dropped,
+-- or (worst case) actually reaching this column — see that file's
+-- header comment and the QA report for the request that proves this.
+-- ============================================================
+
+ALTER TABLE reports
+  ADD COLUMN report_version INTEGER NOT NULL DEFAULT 1;
+
+-- ============================================================
+-- End of migration 0004.
+-- ============================================================

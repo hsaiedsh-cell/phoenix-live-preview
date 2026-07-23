@@ -1,0 +1,71 @@
+-- ============================================================
+-- Phoenix Backend — Migration 0003: Report Request Constraints
+-- PHX-REPORTS-003 — Report Request API & State Model
+-- PHX-REPORTS-003-R1 — corrects R0's COALESCE-sentinel approach; see
+-- below. R0 was rejected in ChatGPT architecture/QA review before this
+-- migration was ever applied to any real environment (including
+-- production), so this file is corrected in place rather than layered
+-- with a second migration — there is no deployed R0 state to migrate
+-- away from.
+-- ------------------------------------------------------------
+-- The `reports` and `report_templates` tables already exist in full
+-- (migration 0001_initial_schema.sql) with every column this sprint's
+-- write path needs (see repositories/reports.repository.ts's file
+-- header for the full confirmation). This migration adds exactly one
+-- constraint — no column is added, renamed, or altered here (see
+-- migration 0004_report_version.sql for the one column this sprint
+-- does add).
+--
+-- The gap this closes: nothing at the database level prevented two
+-- concurrent POST /api/workspaces/:workspaceId/reports requests for
+-- the same (workspace, template, asset) from both succeeding — the
+-- application-level check in reports.repository.ts's
+-- findActiveReportRequest() (called before the insert) is correct for
+-- the common case but has a TOCTOU race under concurrent requests.
+--
+-- ---- R1 correction: NULLS NOT DISTINCT, not a COALESCE sentinel ------
+-- R0 used `COALESCE(asset_id, '00000000-...'::uuid)` inside a unique
+-- index expression to make NULL asset_id values collide with each
+-- other (PostgreSQL's default unique-index behavior treats every NULL
+-- as distinct from every other NULL, so a plain
+-- UNIQUE (workspace_id, template_id, asset_id) index would let two
+-- concurrent Workspace-scope requests, both asset_id IS NULL, both
+-- succeed). ChatGPT QA review correctly flagged the sentinel as an
+-- unnecessary compatibility workaround: this project's Postgres
+-- version is pinned to postgres:16-alpine
+-- (apps/backend/docker-compose.yml) and PostgreSQL 16 fully supports
+-- the NULLS NOT DISTINCT unique-index modifier, introduced in
+-- PostgreSQL 15. NULLS NOT DISTINCT is the direct, built-in expression
+-- of exactly what this constraint needs ("treat NULL as an ordinary,
+-- colliding value for uniqueness purposes here") — no COALESCE
+-- expression, no sentinel UUID, no risk (however theoretical) of a
+-- real asset_id ever equaling a hand-picked constant. This decision
+-- assumes PostgreSQL >= 15 everywhere this migration runs; the
+-- project's own docker-compose.yml and every environment this backend
+-- has been run against in this sprint's QA (see the QA report) is
+-- PostgreSQL 16, so this assumption holds for this project as pinned
+-- today. If a future sprint needs to support PostgreSQL < 15, this
+-- index would need to revert to the COALESCE-sentinel form (or an
+-- equivalent) at that time — not preemptively here.
+--
+-- The partial WHERE clause is unchanged from R0's intent: restricts
+-- this to rows that are actually "in flight"
+-- (status IN ('Requested', 'Generating') — matching
+-- ACTIVE_REPORT_STATUSES in reports.repository.ts, itself matching
+-- docs/platform/DATA_LIFECYCLE_PHX_PLATFORM_002.md §5's Report
+-- Lifecycle table) and not soft-deleted, so a completed (Available),
+-- Expired, or Failed report never blocks a new request for the same
+-- template/asset — only a genuinely duplicate in-flight request does.
+-- 'Generating' is included even though this sprint never writes that
+-- status, so the constraint remains correct once a later sprint adds
+-- generation, without needing a second migration to widen it.
+-- ============================================================
+
+CREATE UNIQUE INDEX uq_reports_active_request
+  ON reports (workspace_id, template_id, asset_id)
+  NULLS NOT DISTINCT
+  WHERE status IN ('Requested', 'Generating') AND deleted_at IS NULL;
+
+-- ============================================================
+-- End of migration 0003.
+-- ============================================================

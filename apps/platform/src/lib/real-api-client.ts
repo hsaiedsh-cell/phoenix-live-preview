@@ -294,6 +294,68 @@ export async function realFetch<T>(path: string, authHeaders: Record<string, str
 }
 
 // ---------------------------------------------------------------------------
+// PHX-REPORTS-003 — POST-capable fetch helper.
+//
+// realFetch() above is GET-only by design (see its own header comment)
+// and used by every read this codebase has migrated so far
+// (PHX-PLATFORM-011 through PHX-REPORTS-001). This sprint's
+// POST /api/workspaces/:workspaceId/reports is the first real write
+// endpoint anywhere in this frontend, so a POST-capable sibling is
+// added here rather than changing realFetch()'s signature/behavior —
+// every existing GET call site (real-api-client.server.ts,
+// real-api-client.client.ts) is untouched.
+//
+// Same envelope-parsing/error-mapping logic as realFetch(), same
+// "caller resolves auth headers, this function just sends them"
+// contract. `cache: 'no-store'` is not needed for a POST (Next.js
+// never build-time-caches a POST), but is included anyway for
+// consistency with realFetch() and to avoid any ambiguity.
+// ---------------------------------------------------------------------------
+
+export async function realPost<T>(
+  path: string,
+  authHeaders: Record<string, string>,
+  body: unknown
+): Promise<T> {
+  const { baseUrl } = getPhoenixApiConfig();
+  if (!baseUrl) {
+    throw new RealApiConfigError('No backend URL configured (NEXT_PUBLIC_PHOENIX_BACKEND_URL).');
+  }
+
+  const url = `${baseUrl}${path}`;
+
+  let response: Response;
+  try {
+    response = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', ...authHeaders },
+      body: JSON.stringify(body),
+      credentials: 'omit',
+      cache: 'no-store',
+    });
+  } catch {
+    throw new RealApiError(0, 'BACKEND_UNAVAILABLE', `Backend unavailable at ${baseUrl}. Is it running?`);
+  }
+
+  let envelope: BackendEnvelope<T> | null = null;
+  try {
+    envelope = (await response.json()) as BackendEnvelope<T>;
+  } catch {
+    throw new RealApiError(
+      response.status,
+      'BACKEND_ERROR',
+      `Backend returned a non-JSON response (status ${response.status}).`
+    );
+  }
+
+  if (!response.ok || !envelope.ok) {
+    throw backendErrorToRealApiError(response.status, envelope.error);
+  }
+
+  return envelope.data as T;
+}
+
+// ---------------------------------------------------------------------------
 // Backend payload types.
 //
 // PHX-PLATFORM-011-R1 CORRECTION: live verification against a real,
@@ -634,6 +696,60 @@ export interface BackendReport {
   failureReason: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * POST /api/workspaces/:workspaceId/reports response body
+ * (PHX-REPORTS-003). Matches
+ * repositories/reports.repository.ts's ReportRequestRecord exactly —
+ * this is deliberately a DIFFERENT (narrower) shape than BackendReport
+ * above. BackendReport is the read-side shape (previewGetReports(),
+ * PHX-REPORTS-001), which joins in `templateName`, `assetName`, and
+ * `requestedByDisplayName` from related tables. The POST endpoint
+ * performs no such joins and never returns those three fields — R0
+ * incorrectly typed this response as BackendReport, which compiled
+ * (both are structurally compatible enough for the fields
+ * RequestReportButton.tsx actually reads: id/name/status) but claimed
+ * fields the real response never has. Corrected in R1 to its own,
+ * accurate type.
+ */
+export interface CreateReportRequestResult {
+  id: string;
+  workspaceId: string;
+  templateId: string;
+  /** The report's own denormalized display name (reports.name), set from the template's name at request time — NOT a joined templateName. */
+  name: string;
+  /** ReportStatus: always 'Requested' for this endpoint's response in this sprint. */
+  status: string;
+  assetId: string | null;
+  requestedByUserId: string;
+  requestedAt: string;
+  generatedAt: string | null;
+  fileUrl: string | null;
+  /** 'pdf' | 'html' | 'csv'. */
+  format: string;
+  expiresAt: string | null;
+  failureReason: string | null;
+  /** Maps reports.report_version (migration 0004_report_version.sql). Always 1 for every row this sprint's code creates — server/database-controlled, never client-supplied. */
+  version: number;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/**
+ * POST /api/workspaces/:workspaceId/reports request body
+ * (PHX-REPORTS-003). Mirrors apps/backend/src/validation/schemas/
+ * report.schemas.ts's CreateReportRequestBodySchema exactly —
+ * `assetId` is required only when the referenced template's scope is
+ * 'SingleAsset' (the backend enforces this; this type does not,
+ * matching the backend's own shape-only-at-this-layer division of
+ * responsibility). Deliberately has NO `version` field — the backend
+ * schema is `.strict()` and rejects one; see that schema's header.
+ */
+export interface CreateReportRequestInput {
+  templateId: string;
+  assetId?: string | null;
+  format?: 'pdf' | 'html' | 'csv';
 }
 
 // ---------------------------------------------------------------------------

@@ -35,6 +35,7 @@ import { getPhoenixApiConfig } from './api-config';
 import { getBackendAuthHeaders } from './auth/platform-auth.client';
 import {
   realFetch,
+  realPost,
   RealApiConfigError,
   RealApiAuthRequiredError,
   type BackendPaginatedResult,
@@ -45,6 +46,8 @@ import {
   type BackendAssessmentDetail,
   type BackendEvidenceItem,
   type BackendScore,
+  type CreateReportRequestInput,
+  type CreateReportRequestResult,
 } from './real-api-client';
 
 /**
@@ -94,6 +97,16 @@ async function clientFetch<T>(path: string): Promise<T> {
   return realFetch<T>(path, headers);
 }
 
+// PHX-REPORTS-003: POST-capable sibling of clientFetch() above, using
+// the exact same resolveClientAuthHeaders() this file already
+// resolves for reads — real-dev's X-Phoenix-User-Id header or
+// production-auth's Bearer token, never anything invented for this
+// write path specifically.
+async function clientPost<T>(path: string, body: unknown): Promise<T> {
+  const headers = await resolveClientAuthHeaders();
+  return realPost<T>(path, headers, body);
+}
+
 // ---------------------------------------------------------------------------
 // Public read functions — call these from Client Components only. No
 // page calls these yet this sprint (see file header).
@@ -133,4 +146,25 @@ export async function realGetAssessmentEvidence(
 
 export async function realGetAssessmentScore(assessmentId: string): Promise<BackendScore | null> {
   return clientFetch<BackendScore | null>(`/api/assessments/${encodeURIComponent(assessmentId)}/score`);
+}
+
+// ---------------------------------------------------------------------------
+// PHX-REPORTS-003 — first write function in this file. Called from
+// RequestReportButton.tsx (a Client Component — this is why the write
+// lives here, in the client variant, rather than in
+// real-api-client.server.ts). Returns the created report request
+// (status 'Requested', version 1) on success; throws RealApiError/
+// RealApiConfigError/RealApiAuthRequiredError on failure, same as
+// every read function above — callers handle these the same way.
+//
+// R1 correction: the return type is CreateReportRequestResult, not
+// BackendReport — see that type's doc comment in real-api-client.ts
+// for why R0's reuse of BackendReport here was inaccurate.
+// ---------------------------------------------------------------------------
+
+export async function realCreateReportRequest(
+  workspaceId: string,
+  input: CreateReportRequestInput
+): Promise<CreateReportRequestResult> {
+  return clientPost<CreateReportRequestResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/reports`, input);
 }

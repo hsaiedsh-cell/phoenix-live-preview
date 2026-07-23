@@ -3,6 +3,7 @@ export const dynamic = 'force-dynamic';
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { ReportCard } from '@/components/ReportCard';
 import { LiveReportsTable } from '@/components/LiveReportsTable';
+import { RequestReportButton } from '@/components/RequestReportButton';
 import { PreviewOnlyNotice, LiveDataBadge, renderDataStatePanel } from '@/components/DataStatePanel';
 import { getReports, getCurrentWorkspace } from '@/lib/api-client';
 import { getPhoenixApiConfig } from '@/lib/api-config';
@@ -16,8 +17,17 @@ import { loadReportsListData } from '@/lib/platform-data-source';
 // reports.ts is still a PHX-BACKEND-001 stub (every route 501s), so those
 // modes have no live reports data source to read from yet.
 //
-// Strictly read-only: report generation, PDF/Excel export, scheduling, and
-// template management are not implemented in any mode — see
+// PHX-REPORTS-003 — Report Request API & State Model. Adds the one write
+// action this sprint introduces: a "Request Report" button, rendered only
+// in real-dev/production-auth mode (the two modes where
+// apps/backend/src/routes/reports.ts's POST handler is actually reachable
+// — vercel-supabase-preview has no write path for this sprint; see
+// RequestReportButton.tsx's header for the full rationale, including why
+// templateId comes from an interim env-configured default rather than a
+// live template list). The rest of this page (mock cards, the
+// vercel-supabase-preview live table below) is otherwise unchanged from
+// PHX-REPORTS-001 — report generation, PDF/Excel export, scheduling, and
+// template management remain unimplemented in every mode; see
 // LiveReportsTable.tsx's closing note and PreviewOnlyNotice below.
 export default async function ReportsPage() {
   const apiConfig = getPhoenixApiConfig();
@@ -25,6 +35,18 @@ export default async function ReportsPage() {
 
   if (apiConfig.mode !== 'vercel-supabase-preview') {
     const reports = await getReports();
+
+    // PHX-REPORTS-003: workspaceId for the write call comes from the same
+    // interim env bridges the rest of this app already uses for these two
+    // modes (devWorkspaceId for real-dev, productionWorkspaceId for
+    // production-auth) — no new bridge is introduced for this. Null in
+    // mock/real-disabled, where RequestReportButton is not rendered at all.
+    const requestReportWorkspaceId =
+      apiConfig.mode === 'real-dev'
+        ? apiConfig.devWorkspaceId
+        : apiConfig.mode === 'production-auth'
+          ? apiConfig.productionWorkspaceId
+          : null;
 
     return (
       <div>
@@ -37,6 +59,15 @@ export default async function ReportsPage() {
         {/* No live reports endpoint exists yet for this mode; this page
             remains mock-backed, as it was before PHX-REPORTS-001. */}
         {apiConfig.mode !== 'mock' && <PreviewOnlyNotice />}
+
+        {(apiConfig.mode === 'real-dev' || apiConfig.mode === 'production-auth') && (
+          <div className="mb-6">
+            <RequestReportButton
+              workspaceId={requestReportWorkspaceId}
+              templateId={apiConfig.defaultReportTemplateId}
+            />
+          </div>
+        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {reports.map((item) => (

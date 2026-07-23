@@ -91,7 +91,12 @@ export type AuditAction =
   | 'assessment.submit'
   | 'evidence.create'
   | 'evidence.update'
-  | 'evidence.delete';
+  | 'evidence.delete'
+  // PHX-REPORTS-003: the audit action the task brief specifies
+  // verbatim ("Write an audit event: report.requested"). Matches the
+  // dot-separated lowercase convention every action above already
+  // uses.
+  | 'report.requested';
 
 /** A single field's [before, after] pair — the atom `changes` is built from. */
 export type FieldChange = [before: unknown, after: unknown];

@@ -22,7 +22,8 @@
 --        04 user, 05 workspace_user, 06 asset, 07 asset_version,
 --        08 assessment, 09 assessment_step, 0a evidence_item,
 --        0b pbrs_score, 0c pbrs_dimension_score, 0d derived_signal,
---        0e pbrs_passport, 0f activity_log, 10 audit_record)
+--        0e pbrs_passport, 0f activity_log, 10 audit_record,
+--        11 report_template — added PHX-REPORTS-003)
 --   NNNN... = 12-digit sequence within that entity type.
 --
 -- Sample record names ("Acme Enterprise", "Acme Enterprise Workspace",
@@ -374,6 +375,55 @@ VALUES (
   '{"status": ["Under Review", "Approved"]}'::jsonb,
   'Dev seed record — PHX-BACKEND-003.'
 )
+ON CONFLICT (id) DO NOTHING;
+
+COMMIT;
+
+-- ============================================================
+-- report_templates (2) — PHX-REPORTS-003
+-- ------------------------------------------------------------
+-- Added in a separate transaction/append, not a rewrite of the block
+-- above, matching the idempotent-append convention already used by
+-- every PHX-BACKEND-006/007 addition to this file. Neither
+-- report_templates nor reports had any seed data before this sprint —
+-- POST /api/workspaces/:workspaceId/reports has no valid templateId
+-- to reference without these rows. Two templates, covering the two
+-- scope branches routes/reports.ts's POST handler actually checks:
+--   - SingleAsset (requires assetId — see 00000006-...-001, the
+--     already-seeded "Q3 Investor Update Draft" asset, above)
+--   - Workspace (forbids assetId)
+-- CertificationPortfolio is a real, valid scope value too but is not
+-- separately seeded here — the SingleAsset/Workspace pair already
+-- exercises both branches of the scope-vs-assetId business rule; a
+-- third template would not add new coverage for this sprint's QA.
+-- ID convention: marker 0x11 (report_template), continuing the
+-- sequence documented in this file's header (...0f activity_log,
+-- 10 audit_record).
+-- ============================================================
+BEGIN;
+
+INSERT INTO report_templates (id, key, name, description, scope, output_formats, created_at, updated_at)
+VALUES
+  (
+    '00000011-1111-4111-8111-000000000001',
+    'asset-readiness-summary',
+    'Asset Readiness Summary',
+    'A single-asset PBRS readiness summary: dimension scores, derived signals, and evidence references for one asset.',
+    'SingleAsset',
+    ARRAY['pdf', 'html'],
+    '2026-01-10T09:00:00Z',
+    '2026-01-10T09:00:00Z'
+  ),
+  (
+    '00000011-1111-4111-8111-000000000002',
+    'workspace-portfolio-summary',
+    'Workspace Portfolio Summary',
+    'A workspace-wide portfolio summary across every assessed asset in the workspace.',
+    'Workspace',
+    ARRAY['pdf', 'csv'],
+    '2026-01-10T09:00:00Z',
+    '2026-01-10T09:00:00Z'
+  )
 ON CONFLICT (id) DO NOTHING;
 
 COMMIT;

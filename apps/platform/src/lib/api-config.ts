@@ -94,6 +94,23 @@ export interface PhoenixApiConfig {
    * endpoint at all in this mode; see lib/preview-api-client.server.ts).
    */
   productionWorkspaceId: string | null;
+  /**
+   * PHX-REPORTS-003: interim, explicitly-temporary default report
+   * template id, used only by RequestReportButton.tsx to know which
+   * templateId to send to POST /api/workspaces/:workspaceId/reports.
+   * The backend has no "list report templates" endpoint yet (GET
+   * .../reports itself is still a PHX-BACKEND-001 stub — see
+   * apps/backend/src/routes/reports.ts — let alone a templates-only
+   * listing endpoint, which is out of this sprint's scope entirely),
+   * so there is nothing live the frontend could otherwise read a
+   * template choice from. Mirrors the same interim-bridge pattern as
+   * devWorkspaceId/devUserId (real-dev) and productionWorkspaceId
+   * (production-auth/vercel-supabase-preview) above: null when unset,
+   * and callers must treat that as "not configured" (an inert,
+   * disabled button state — never a fabricated/guessed template id).
+   * real-dev and production-auth only; not read in any other mode.
+   */
+  defaultReportTemplateId: string | null;
   /** True when a mode requiring config (real-dev, production-auth) is missing required env vars. */
   isMisconfigured: boolean;
   /** Human-readable label for the current mode, used by the Settings runtime indicator. */
@@ -154,6 +171,7 @@ export function getPhoenixApiConfig(): PhoenixApiConfig {
   const clerkPublishableKey = readEnv('NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY') ?? null;
   const clerkConfigured = Boolean(clerkPublishableKey);
   const productionWorkspaceId = readEnv('NEXT_PUBLIC_PHOENIX_PRODUCTION_WORKSPACE_ID') ?? null;
+  const defaultReportTemplateId = readEnv('NEXT_PUBLIC_PHOENIX_DEFAULT_REPORT_TEMPLATE_ID') ?? null;
 
   let isMisconfigured = false;
   let modeLabel: string;
@@ -224,6 +242,7 @@ export function getPhoenixApiConfig(): PhoenixApiConfig {
     clerkConfigured,
     productionWorkspaceId:
       mode === 'production-auth' || mode === 'vercel-supabase-preview' ? productionWorkspaceId : null,
+    defaultReportTemplateId: mode === 'real-dev' || mode === 'production-auth' ? defaultReportTemplateId : null,
     isMisconfigured,
     modeLabel,
     statusDescription,

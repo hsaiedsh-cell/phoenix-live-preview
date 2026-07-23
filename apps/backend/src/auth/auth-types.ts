@@ -64,4 +64,11 @@ export type Permission =
   | 'evidence.delete'
   | 'audit.read'
   | 'passport.issue'
-  | 'certification.grant';
+  | 'certification.grant'
+  // PHX-REPORTS-003: gates POST /api/workspaces/:workspaceId/reports
+  // (the "Request" action in docs/platform/PERMISSIONS_MODEL_PHX_PLATFORM_002.md's
+  // Reports table). Named reports.generate per the task brief, even
+  // though this sprint only ever creates a Requested-status row and
+  // never actually generates a report — see permissions.ts for the
+  // exact role mapping this permission uses.
+  | 'reports.generate';

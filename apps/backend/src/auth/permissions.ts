@@ -66,6 +66,7 @@ const ALL_PERMISSIONS: readonly Permission[] = [
   'audit.read',
   'passport.issue',
   'certification.grant',
+  'reports.generate',
 ];
 
 const PERMISSION_MATRIX: Record<WorkspaceRole, readonly Permission[]> = {
@@ -89,6 +90,12 @@ const PERMISSION_MATRIX: Record<WorkspaceRole, readonly Permission[]> = {
   // Reviewer) and NOT assessment.submit (see note 1 above). NOT
   // audit.read (canViewAuditTrail excludes Reviewer). NOT
   // certification.grant.
+  //
+  // PHX-REPORTS-003: reports.generate added, matching the Reports —
+  // "Request" row (C for Owner/Admin/Reviewer/Contributor, — for
+  // Viewer/Auditor) in
+  // docs/platform/PERMISSIONS_MODEL_PHX_PLATFORM_002.md's Reports
+  // table.
   Reviewer: [
     'workspace.read',
     'assessment.read',
@@ -97,11 +104,13 @@ const PERMISSION_MATRIX: Record<WorkspaceRole, readonly Permission[]> = {
     'evidence.update',
     'evidence.delete',
     'passport.issue',
+    'reports.generate',
   ],
 
   // Contributor: can create and submit assessments, full evidence
   // read/write. No audit.read, no passport.issue, no
-  // certification.grant.
+  // certification.grant. PHX-REPORTS-003: reports.generate added —
+  // same Reports — "Request" row rationale as Reviewer above.
   Contributor: [
     'workspace.read',
     'assessment.read',
@@ -111,13 +120,17 @@ const PERMISSION_MATRIX: Record<WorkspaceRole, readonly Permission[]> = {
     'evidence.create',
     'evidence.update',
     'evidence.delete',
+    'reports.generate',
   ],
 
   // Viewer: read-only across the board. No audit.read (Viewer is not
-  // listed in canViewAuditTrail).
+  // listed in canViewAuditTrail). PHX-REPORTS-003: no reports.generate
+  // either — the Reports table's "Request" row has "—" for Viewer.
   Viewer: ['workspace.read', 'assessment.read', 'evidence.read'],
 
   // Auditor: read-only, plus the audit trail specifically.
+  // PHX-REPORTS-003: no reports.generate — the Reports table's
+  // "Request" row has "—" for Auditor too.
   Auditor: ['workspace.read', 'assessment.read', 'evidence.read', 'audit.read'],
 };
 

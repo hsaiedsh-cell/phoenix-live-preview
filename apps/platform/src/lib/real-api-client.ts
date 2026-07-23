@@ -534,6 +534,44 @@ export interface BackendPassport {
   updatedAt: string;
 }
 
+/**
+ * One row of a live certifications list (PHX-CERTIFICATIONS-001,
+ * vercel-supabase-preview mode only — mirrors pbrs_certifications joined
+ * with its issuing pbrs_passports row and the underlying asset). There is
+ * no real-dev / production-auth counterpart yet: apps/backend/src/routes/
+ * certifications.ts is still a PHX-BACKEND-001 stub (every route returns
+ * 501 Not Implemented), so this type is only ever populated by
+ * previewGetCertifications() in preview-api-client.server.ts — the exact
+ * same architectural pattern BackendPassport/previewGetPassports()
+ * established for PHX-PASSPORTS-001.
+ *
+ * `certificationLevel` (PBRS Foundation/Practitioner/Enterprise) is
+ * intentionally NOT included here — it is a derived, presentation-layer
+ * value with a single source of truth in
+ * lib/certification-levels.ts's certificationLevelFromScore(scoreSnapshot),
+ * not a stored column, so callers derive it from `scoreSnapshot` rather
+ * than this read layer duplicating that logic. `tier` here is the stored
+ * PBRS Internal Tier ('Platinum'|'Gold'|'Silver'|'Bronze') already granted
+ * for this certification row — not derived.
+ */
+export interface BackendCertification {
+  id: string;
+  certificationId: string;
+  passportId: string;
+  assetId: string;
+  assetName: string;
+  assessmentId: string;
+  /** PBRS Internal Tier granted for this certification: 'Platinum' | 'Gold' | 'Silver' | 'Bronze'. */
+  tier: string;
+  /** CertificationStatus: 'Certified' | 'Expiring Soon' | 'Expired' | 'Eligible' | 'Not Eligible'. */
+  status: string;
+  scoreSnapshot: number;
+  issuedDate: string | null;
+  expiryDate: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
 // ---------------------------------------------------------------------------
 // Read functions have moved to real-api-client.server.ts (Server
 // Component / server-only reads, used by platform-data-source.ts) and

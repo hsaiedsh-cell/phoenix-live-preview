@@ -55,6 +55,7 @@ import {
   type BackendActivityItem,
   type BackendAuditRecord,
   type BackendPassport,
+  type BackendCertification,
 } from './real-api-client';
 
 // ---------------------------------------------------------------------------
@@ -633,6 +634,90 @@ export async function previewGetPassports(workspaceId: string): Promise<BackendP
     revokedAt: row.revoked_at,
     certificationTier: row.certification_tier,
     certificationStatus: row.certification_status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+
+  return { items, total: items.length, cursor: null };
+}
+
+// ---------------------------------------------------------------------------
+// Certifications list (PHX-CERTIFICATIONS-001) — mirrors
+// previewGetPassports() immediately above, column-for-column and
+// structurally identical: same workspaceExists() 404 check, same
+// 'assessment.read' permission (there is no dedicated
+// certification.read permission — see apps/backend/src/auth/
+// permissions.ts; 'assessment.read' is granted to every role, matching
+// the Certifications page's "visible to every signed-in workspace
+// member" access), same single bounded read with no pagination cursor.
+// Joins pbrs_certifications -> pbrs_passports (for assessment_id) ->
+// assets (for display name), soft-deleted rows excluded. No
+// Certification Level / Internal Tier THRESHOLD logic here — this
+// returns the certification record exactly as already persisted; see
+// certification-levels.ts, which remains the sole source of truth for
+// deriving a Certification Level from `scoreSnapshot`.
+// ---------------------------------------------------------------------------
+
+export async function previewGetCertifications(
+  workspaceId: string
+): Promise<BackendPaginatedResult<BackendCertification>> {
+  if (!(await workspaceExists(workspaceId))) {
+    throw new RealApiError(404, 'NOT_FOUND', 'Workspace not found.');
+  }
+  await requirePreviewPermission(workspaceId, 'assessment.read');
+
+  const pool = getPreviewDatabasePool();
+  const result = await pool.query<{
+    id: string;
+    certification_id: string;
+    passport_id: string;
+    asset_id: string;
+    asset_name: string;
+    assessment_id: string;
+    tier: string;
+    status: string;
+    score_snapshot: string;
+    issued_date: string | null;
+    expiry_date: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT
+       c.id                AS id,
+       c.certification_id  AS certification_id,
+       c.passport_id       AS passport_id,
+       p.asset_id          AS asset_id,
+       ast.name            AS asset_name,
+       p.assessment_id     AS assessment_id,
+       c.tier              AS tier,
+       c.status            AS status,
+       c.score_snapshot    AS score_snapshot,
+       c.issued_date       AS issued_date,
+       c.expiry_date       AS expiry_date,
+       c.created_at        AS created_at,
+       c.updated_at        AS updated_at
+     FROM pbrs_certifications c
+     JOIN pbrs_passports p ON p.id = c.passport_id
+     JOIN assets ast ON ast.id = p.asset_id
+     WHERE c.workspace_id = $1
+       AND c.deleted_at IS NULL
+     ORDER BY c.created_at DESC
+     LIMIT 100`,
+    [workspaceId]
+  );
+
+  const items: BackendCertification[] = result.rows.map((row) => ({
+    id: row.id,
+    certificationId: row.certification_id,
+    passportId: row.passport_id,
+    assetId: row.asset_id,
+    assetName: row.asset_name,
+    assessmentId: row.assessment_id,
+    tier: row.tier,
+    status: row.status,
+    scoreSnapshot: Number(row.score_snapshot),
+    issuedDate: row.issued_date,
+    expiryDate: row.expiry_date,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));

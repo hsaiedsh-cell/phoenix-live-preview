@@ -84,6 +84,7 @@ import {
   previewGetWorkspaceActivity,
   previewGetWorkspaceAuditRecords,
   previewGetPassports,
+  previewGetCertifications,
 } from './preview-api-client.server';
 import {
   RealApiError,
@@ -96,6 +97,7 @@ import {
   type BackendActivityItem,
   type BackendAuditRecord,
   type BackendPassport,
+  type BackendCertification,
 } from './real-api-client';
 
 /** Which runtime mode is active. Re-exported from api-config.ts's PhoenixApiMode for call-site clarity — same four values. */
@@ -394,6 +396,52 @@ export async function loadPassportsListData(): Promise<LiveResult<LivePassportsL
 
   try {
     const { items, total } = await previewGetPassports(workspaceId);
+    return { status: 'live', mode: config.mode, data: { workspaceId, items, total } };
+  } catch (err) {
+    return errorToLiveResult(err, config.mode);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Certifications list (PHX-CERTIFICATIONS-001) — vercel-supabase-preview
+// mode only, exact same architectural pattern as loadPassportsListData()
+// immediately above. There is no real-dev / production-auth branch here
+// (unlike every other function in this file, save loadPassportsListData()):
+// apps/backend/src/routes/certifications.ts is still a PHX-BACKEND-001
+// stub (every route 501s), so real-dev/production-auth simply have no
+// live certifications data source to call yet. Those two modes (and
+// 'real-disabled') therefore return 'mock' here deliberately, NOT
+// 'not-wired' — /certifications/page.tsx keeps rendering its existing
+// mock-backed view for every mode except vercel-supabase-preview, exactly
+// as it did before this sprint.
+//
+// Only the certified-assets LIST is migrated. "Eligible Assets" and
+// "Expiring Soon" (mock-only stat cards derived from assessment-score-
+// threshold matching against every assessment in the workspace) are NOT
+// part of this read — this endpoint returns only rows that already exist
+// in pbrs_certifications. Showing a fabricated 0 for either would
+// misrepresent an unknown value as a known one, so the page omits those
+// stat cards, the Certification Level cards' per-level asset counts, and
+// the certification-granting governance panel (a write action, and
+// preview-only in every mode per this sprint's brief) entirely in
+// vercel-supabase-preview mode — see certifications/page.tsx.
+// ---------------------------------------------------------------------------
+
+export interface LiveCertificationsListData {
+  workspaceId: string;
+  items: BackendCertification[];
+  total: number;
+}
+
+export async function loadCertificationsListData(): Promise<LiveResult<LiveCertificationsListData>> {
+  const config = getPhoenixApiConfig();
+  if (config.mode !== 'vercel-supabase-preview') return mockResult(config.mode);
+
+  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
+
+  try {
+    const { items, total } = await previewGetCertifications(workspaceId);
     return { status: 'live', mode: config.mode, data: { workspaceId, items, total } };
   } catch (err) {
     return errorToLiveResult(err, config.mode);

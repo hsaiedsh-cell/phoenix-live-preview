@@ -85,6 +85,7 @@ import {
   previewGetWorkspaceAuditRecords,
   previewGetPassports,
   previewGetCertifications,
+  previewGetReports,
 } from './preview-api-client.server';
 import {
   RealApiError,
@@ -98,6 +99,7 @@ import {
   type BackendAuditRecord,
   type BackendPassport,
   type BackendCertification,
+  type BackendReport,
 } from './real-api-client';
 
 /** Which runtime mode is active. Re-exported from api-config.ts's PhoenixApiMode for call-site clarity — same four values. */
@@ -442,6 +444,44 @@ export async function loadCertificationsListData(): Promise<LiveResult<LiveCerti
 
   try {
     const { items, total } = await previewGetCertifications(workspaceId);
+    return { status: 'live', mode: config.mode, data: { workspaceId, items, total } };
+  } catch (err) {
+    return errorToLiveResult(err, config.mode);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Reports list (PHX-REPORTS-001) — vercel-supabase-preview mode only, exact
+// same architectural pattern as loadPassportsListData()/
+// loadCertificationsListData() immediately above. There is no real-dev /
+// production-auth branch here (same as those two): apps/backend/src/routes/
+// reports.ts is still a PHX-BACKEND-001 stub (every route 501s), so
+// real-dev/production-auth simply have no live reports data source to call
+// yet. Those two modes (and 'real-disabled') therefore return 'mock' here
+// deliberately, NOT 'not-wired' — /reports/page.tsx keeps rendering its
+// existing mock-backed view for every mode except vercel-supabase-preview,
+// exactly as it did before this sprint.
+//
+// This is strictly a read of existing report records — no report
+// generation, PDF/Excel export, or scheduling is implemented by this
+// function or anywhere else in this sprint.
+// ---------------------------------------------------------------------------
+
+export interface LiveReportsListData {
+  workspaceId: string;
+  items: BackendReport[];
+  total: number;
+}
+
+export async function loadReportsListData(): Promise<LiveResult<LiveReportsListData>> {
+  const config = getPhoenixApiConfig();
+  if (config.mode !== 'vercel-supabase-preview') return mockResult(config.mode);
+
+  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
+
+  try {
+    const { items, total } = await previewGetReports(workspaceId);
     return { status: 'live', mode: config.mode, data: { workspaceId, items, total } };
   } catch (err) {
     return errorToLiveResult(err, config.mode);

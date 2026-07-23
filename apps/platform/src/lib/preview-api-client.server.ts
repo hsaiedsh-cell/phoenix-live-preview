@@ -56,6 +56,7 @@ import {
   type BackendAuditRecord,
   type BackendPassport,
   type BackendCertification,
+  type BackendReport,
 } from './real-api-client';
 
 // ---------------------------------------------------------------------------
@@ -718,6 +719,106 @@ export async function previewGetCertifications(
     scoreSnapshot: Number(row.score_snapshot),
     issuedDate: row.issued_date,
     expiryDate: row.expiry_date,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
+  }));
+
+  return { items, total: items.length, cursor: null };
+}
+
+// ---------------------------------------------------------------------------
+// Reports list (PHX-REPORTS-001) — vercel-supabase-preview mode only, same
+// architectural pattern as previewGetPassports()/previewGetCertifications()
+// immediately above: same workspaceExists() 404 check, same 'assessment.read'
+// permission (there is no dedicated report.read permission — see
+// apps/backend/src/auth/permissions.ts; 'assessment.read' is granted to
+// every role, matching every other read this sprint's siblings migrated),
+// same single bounded read with no pagination cursor.
+//
+// Joins reports -> report_templates (for templateName) and reports -> users
+// (for requestedByDisplayName, requested_by_user_id is NOT NULL so this is
+// an inner join), and a LEFT JOIN to assets (asset_id is nullable — a
+// Workspace-scope or CertificationPortfolio-scope report has no asset).
+// Read-only: this sprint does not implement report generation, PDF/Excel
+// export, or scheduling — see BackendReport's doc comment in
+// real-api-client.ts for why this row shape differs from the task brief's
+// suggested field list (no assessment_id column exists on `reports`).
+// ---------------------------------------------------------------------------
+
+export async function previewGetReports(workspaceId: string): Promise<BackendPaginatedResult<BackendReport>> {
+  if (!(await workspaceExists(workspaceId))) {
+    throw new RealApiError(404, 'NOT_FOUND', 'Workspace not found.');
+  }
+  await requirePreviewPermission(workspaceId, 'assessment.read');
+
+  const pool = getPreviewDatabasePool();
+  const result = await pool.query<{
+    id: string;
+    workspace_id: string;
+    template_id: string;
+    template_name: string;
+    name: string;
+    status: string;
+    asset_id: string | null;
+    asset_name: string | null;
+    requested_by_user_id: string;
+    requested_by_display_name: string;
+    requested_at: string;
+    generated_at: string | null;
+    file_url: string | null;
+    format: string;
+    expires_at: string | null;
+    failure_reason: string | null;
+    created_at: string;
+    updated_at: string;
+  }>(
+    `SELECT
+       r.id                     AS id,
+       r.workspace_id           AS workspace_id,
+       r.template_id            AS template_id,
+       tpl.name                 AS template_name,
+       r.name                   AS name,
+       r.status                 AS status,
+       r.asset_id               AS asset_id,
+       ast.name                 AS asset_name,
+       r.requested_by_user_id   AS requested_by_user_id,
+       u.display_name           AS requested_by_display_name,
+       r.requested_at           AS requested_at,
+       r.generated_at           AS generated_at,
+       r.file_url               AS file_url,
+       r.format                 AS format,
+       r.expires_at             AS expires_at,
+       r.failure_reason         AS failure_reason,
+       r.created_at             AS created_at,
+       r.updated_at             AS updated_at
+     FROM reports r
+     JOIN report_templates tpl ON tpl.id = r.template_id
+     JOIN users u ON u.id = r.requested_by_user_id
+     LEFT JOIN assets ast ON ast.id = r.asset_id
+     WHERE r.workspace_id = $1
+       AND r.deleted_at IS NULL
+     ORDER BY r.created_at DESC
+     LIMIT 100`,
+    [workspaceId]
+  );
+
+  const items: BackendReport[] = result.rows.map((row) => ({
+    id: row.id,
+    workspaceId: row.workspace_id,
+    templateId: row.template_id,
+    templateName: row.template_name,
+    name: row.name,
+    status: row.status,
+    assetId: row.asset_id,
+    assetName: row.asset_name,
+    requestedByUserId: row.requested_by_user_id,
+    requestedByDisplayName: row.requested_by_display_name,
+    requestedAt: row.requested_at,
+    generatedAt: row.generated_at,
+    fileUrl: row.file_url,
+    format: row.format,
+    expiresAt: row.expires_at,
+    failureReason: row.failure_reason,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));

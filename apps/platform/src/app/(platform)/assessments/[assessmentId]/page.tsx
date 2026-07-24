@@ -22,16 +22,17 @@ import { getPhoenixApiConfig } from '@/lib/api-config';
 import { loadAssessmentDetailData } from '@/lib/platform-data-source';
 
 interface AssessmentDetailPageProps {
-  params: { assessmentId: string };
+  params: Promise<{ assessmentId: string }>;
 }
 
 export default async function AssessmentDetailPage({ params }: AssessmentDetailPageProps) {
+  const { assessmentId } = await params;
   const apiConfig = getPhoenixApiConfig();
   const workspace = await getCurrentWorkspace();
 
   if (apiConfig.mode === 'mock') {
     const [detailResult, { items: passportItems }] = await Promise.all([
-      getAssessmentDetail(params.assessmentId),
+      getAssessmentDetail(assessmentId),
       getPassports(),
     ]);
 
@@ -93,7 +94,7 @@ export default async function AssessmentDetailPage({ params }: AssessmentDetailP
         </div>
 
         <AssessmentGovernanceActions
-          assessmentId={params.assessmentId}
+          assessmentId={assessmentId}
           assetName={asset.name}
           statusLabel={statusLabel}
           eligibleCertificationLevel={eligibleCertificationLevel}
@@ -130,7 +131,7 @@ export default async function AssessmentDetailPage({ params }: AssessmentDetailP
   }
 
   // real-dev / production-auth / real-disabled.
-  const result = await loadAssessmentDetailData(params.assessmentId);
+  const result = await loadAssessmentDetailData(assessmentId);
 
   if (result.status === 'not-found') {
     notFound();

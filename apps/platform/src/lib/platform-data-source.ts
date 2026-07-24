@@ -70,6 +70,8 @@ import {
   realGetAssessmentScore,
   realGetWorkspaceActivity,
   realGetWorkspaceAuditRecords,
+  realGetReports,
+  realGetReportDetail,
 } from './real-api-client.server';
 // PHX-DEPLOY-004C: vercel-supabase-preview mode's direct-SQL counterparts
 // to the realGet* functions above. Same input/output shapes, same typed
@@ -451,20 +453,20 @@ export async function loadCertificationsListData(): Promise<LiveResult<LiveCerti
 }
 
 // ---------------------------------------------------------------------------
-// Reports list (PHX-REPORTS-001) — vercel-supabase-preview mode only, exact
-// same architectural pattern as loadPassportsListData()/
-// loadCertificationsListData() immediately above. There is no real-dev /
-// production-auth branch here (same as those two): apps/backend/src/routes/
-// reports.ts is still a PHX-BACKEND-001 stub (every route 501s), so
-// real-dev/production-auth simply have no live reports data source to call
-// yet. Those two modes (and 'real-disabled') therefore return 'mock' here
-// deliberately, NOT 'not-wired' — /reports/page.tsx keeps rendering its
-// existing mock-backed view for every mode except vercel-supabase-preview,
-// exactly as it did before this sprint.
-//
-// This is strictly a read of existing report records — no report
-// generation, PDF/Excel export, or scheduling is implemented by this
-// function or anywhere else in this sprint.
+// Reports list (PHX-REPORTS-001, widened by PHX-REPORTS-004) — same
+// architectural pattern as loadDashboardData()/loadAssessmentsListData()
+// above: mock/real-disabled short-circuit first, then a three-way
+// mode branch (vercel-supabase-preview's direct-Postgres read vs.
+// real-dev/production-auth's HTTP read against the now-real backend
+// endpoints). Before PHX-REPORTS-004, apps/backend/src/routes/reports.ts
+// was still a PHX-BACKEND-001 stub (every route 501s), so real-dev/
+// production-auth had no live reports data source to call and
+// deliberately fell back to 'mock' here — that limitation is what this
+// sprint removes. vercel-supabase-preview remains READ-ONLY (no write
+// path is added to that mode by this sprint — see
+// preview-api-client.server.ts's header) and mock mode is completely
+// unchanged (still returns 'mock' below, still renders via
+// ReportCard/getReports() on /reports/page.tsx).
 // ---------------------------------------------------------------------------
 
 export interface LiveReportsListData {
@@ -475,14 +477,44 @@ export interface LiveReportsListData {
 
 export async function loadReportsListData(): Promise<LiveResult<LiveReportsListData>> {
   const config = getPhoenixApiConfig();
-  if (config.mode !== 'vercel-supabase-preview') return mockResult(config.mode);
+  if (config.mode === 'mock') return mockResult(config.mode);
+  if (config.mode === 'real-disabled') return notWiredResult(config.mode);
 
   const { workspaceId, reason } = resolveLiveWorkspaceId();
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {
-    const { items, total } = await previewGetReports(workspaceId);
+    const { items, total } =
+      config.mode === 'vercel-supabase-preview' ? await previewGetReports(workspaceId) : await realGetReports(workspaceId);
     return { status: 'live', mode: config.mode, data: { workspaceId, items, total } };
+  } catch (err) {
+    return errorToLiveResult(err, config.mode);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Report detail (PHX-REPORTS-004) — real-dev/production-auth only. The
+// backend resolves a report's owning workspace from the report id
+// itself (never trusting a client-supplied workspace id for a
+// report-scoped read — see routes/reports.ts), so this loader, like
+// loadAssessmentDetailData() above, needs no separate workspace
+// resolution step; the reportId alone is enough.
+//
+// vercel-supabase-preview has no per-report detail read (LiveReportsTable
+// renders directly from the list read) — mock mode is unchanged. Both
+// therefore return 'mock'/'not-wired' the same way every other
+// not-yet-migrated-for-this-mode loader in this file does.
+// ---------------------------------------------------------------------------
+
+export async function loadReportDetailData(reportId: string): Promise<LiveResult<BackendReport>> {
+  const config = getPhoenixApiConfig();
+  if (config.mode === 'mock') return mockResult(config.mode);
+  if (config.mode === 'real-disabled') return notWiredResult(config.mode);
+  if (config.mode === 'vercel-supabase-preview') return mockResult(config.mode);
+
+  try {
+    const detail = await realGetReportDetail(reportId);
+    return { status: 'live', mode: config.mode, data: detail };
   } catch (err) {
     return errorToLiveResult(err, config.mode);
   }

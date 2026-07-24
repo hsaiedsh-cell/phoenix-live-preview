@@ -3,50 +3,40 @@ export const dynamic = 'force-dynamic';
 import { WorkspaceHeader } from '@/components/WorkspaceHeader';
 import { ReportCard } from '@/components/ReportCard';
 import { LiveReportsTable } from '@/components/LiveReportsTable';
+import { LiveReportsActionTable } from '@/components/LiveReportsActionTable';
 import { RequestReportButton } from '@/components/RequestReportButton';
 import { PreviewOnlyNotice, LiveDataBadge, renderDataStatePanel } from '@/components/DataStatePanel';
 import { getReports, getCurrentWorkspace } from '@/lib/api-client';
 import { getPhoenixApiConfig } from '@/lib/api-config';
 import { loadReportsListData } from '@/lib/platform-data-source';
 
-// PHX-REPORTS-001 — Live Reports Read Migration. Exact same architectural
-// pattern as PHX-CERTIFICATIONS-001's certifications/page.tsx and
-// PHX-PASSPORTS-001's passports/page.tsx: only vercel-supabase-preview mode
-// reads live data. mock / real-dev / real-disabled / production-auth are
-// all unchanged from before this sprint — apps/backend/src/routes/
-// reports.ts is still a PHX-BACKEND-001 stub (every route 501s), so those
-// modes have no live reports data source to read from yet.
+// PHX-REPORTS-001 — Live Reports Read Migration (vercel-supabase-preview
+// only, read-only, unchanged by this sprint).
 //
-// PHX-REPORTS-003 — Report Request API & State Model. Adds the one write
-// action this sprint introduces: a "Request Report" button, rendered only
-// in real-dev/production-auth mode (the two modes where
-// apps/backend/src/routes/reports.ts's POST handler is actually reachable
-// — vercel-supabase-preview has no write path for this sprint; see
-// RequestReportButton.tsx's header for the full rationale, including why
-// templateId comes from an interim env-configured default rather than a
-// live template list). The rest of this page (mock cards, the
-// vercel-supabase-preview live table below) is otherwise unchanged from
-// PHX-REPORTS-001 — report generation, PDF/Excel export, scheduling, and
-// template management remain unimplemented in every mode; see
-// LiveReportsTable.tsx's closing note and PreviewOnlyNotice below.
+// PHX-REPORTS-003 — Report Request API & State Model. Added the
+// "Request Report" button for real-dev/production-auth.
+//
+// PHX-REPORTS-004 — Report Generation Lifecycle & Secure Artifact
+// Delivery Foundation. real-dev/production-auth now read LIVE report
+// records (loadReportsListData(), widened from vercel-supabase-preview-
+// only) and render an action-aware table (LiveReportsActionTable) with
+// real Start/Retry/Regenerate/Download actions and bounded polling
+// while Generating — see that component and ReportDetailPoller.tsx for
+// the full behavior contract (no client-side role/ownership inference;
+// backend remains authoritative; no fallback to mock data after a real
+// failure).
+//
+// mock and real-disabled are UNCHANGED — still the original mock
+// ReportCard grid via getReports(). vercel-supabase-preview is
+// UNCHANGED — still LiveReportsTable, still read-only, no write path
+// added to that mode by this sprint.
 export default async function ReportsPage() {
   const apiConfig = getPhoenixApiConfig();
   const workspace = await getCurrentWorkspace();
 
-  if (apiConfig.mode !== 'vercel-supabase-preview') {
+  // ---- mock / real-disabled: unchanged mock-backed view ----
+  if (apiConfig.mode === 'mock' || apiConfig.mode === 'real-disabled') {
     const reports = await getReports();
-
-    // PHX-REPORTS-003: workspaceId for the write call comes from the same
-    // interim env bridges the rest of this app already uses for these two
-    // modes (devWorkspaceId for real-dev, productionWorkspaceId for
-    // production-auth) — no new bridge is introduced for this. Null in
-    // mock/real-disabled, where RequestReportButton is not rendered at all.
-    const requestReportWorkspaceId =
-      apiConfig.mode === 'real-dev'
-        ? apiConfig.devWorkspaceId
-        : apiConfig.mode === 'production-auth'
-          ? apiConfig.productionWorkspaceId
-          : null;
 
     return (
       <div>
@@ -56,18 +46,7 @@ export default async function ReportsPage() {
           description="A library of exportable readiness reports. Preview report structure ahead of full export support."
         />
 
-        {/* No live reports endpoint exists yet for this mode; this page
-            remains mock-backed, as it was before PHX-REPORTS-001. */}
         {apiConfig.mode !== 'mock' && <PreviewOnlyNotice />}
-
-        {(apiConfig.mode === 'real-dev' || apiConfig.mode === 'production-auth') && (
-          <div className="mb-6">
-            <RequestReportButton
-              workspaceId={requestReportWorkspaceId}
-              templateId={apiConfig.defaultReportTemplateId}
-            />
-          </div>
-        )}
 
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-5">
           {reports.map((item) => (
@@ -78,9 +57,57 @@ export default async function ReportsPage() {
     );
   }
 
-  // vercel-supabase-preview — live report records, read directly from
+  // ---- real-dev / production-auth: live, action-aware Reports lifecycle ----
+  if (apiConfig.mode === 'real-dev' || apiConfig.mode === 'production-auth') {
+    // Same interim env-bridge convention every other write action on
+    // this page already uses (RequestReportButton) — no new bridge
+    // introduced for this sprint.
+    const requestReportWorkspaceId =
+      apiConfig.mode === 'real-dev' ? apiConfig.devWorkspaceId : apiConfig.productionWorkspaceId;
+
+    const result = await loadReportsListData();
+
+    return (
+      <div>
+        <WorkspaceHeader
+          eyebrow={workspace.data.name}
+          title="Reports"
+          description="Request, generate, and download readiness reports for this workspace."
+        />
+
+        <div className="mb-6">
+          <RequestReportButton
+            workspaceId={requestReportWorkspaceId}
+            templateId={apiConfig.defaultReportTemplateId}
+          />
+        </div>
+
+        {result.status === 'live' && result.data ? (
+          <>
+            <div className="mb-4 flex items-center justify-between">
+              <LiveDataBadge />
+              <span className="text-xs text-gray-400">{result.data.total} total</span>
+            </div>
+            <LiveReportsActionTable items={result.data.items} />
+          </>
+        ) : (
+          // PHX-REPORTS-004: a failed real read never silently falls
+          // back to mock data — it renders the same non-data state
+          // panel every other migrated page uses.
+          renderDataStatePanel(
+            result.status as 'auth-required' | 'config-missing' | 'backend-unavailable' | 'permission-denied' | 'not-found' | 'not-wired',
+            result.message
+          )
+        )}
+      </div>
+    );
+  }
+
+  // ---- vercel-supabase-preview — live report records, read directly from
   // Supabase/Postgres. See lib/preview-api-client.server.ts's
   // previewGetReports() and platform-data-source.ts's loadReportsListData().
+  // Deliberately read-only — no write path is added to this mode by
+  // this sprint.
   const result = await loadReportsListData();
 
   return (

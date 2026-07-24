@@ -55,6 +55,7 @@ export function LiveReportsTable({ items }: LiveReportsTableProps) {
             <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Template</th>
             <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Asset</th>
             <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Status</th>
+            <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Version</th>
             <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Format</th>
             <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Requested by</th>
             <th className="px-5 py-3 font-semibold text-gray-500 text-xs uppercase tracking-wide">Requested</th>
@@ -70,6 +71,7 @@ export function LiveReportsTable({ items }: LiveReportsTableProps) {
                 {item.assetId ? item.assetName : <span className="text-gray-400">Workspace</span>}
               </td>
               <td className="px-5 py-3.5 text-gray-600">{item.status}</td>
+              <td className="px-5 py-3.5 text-gray-400 text-xs">v{item.version}</td>
               <td className="px-5 py-3.5 text-gray-600 uppercase">{item.format}</td>
               <td className="px-5 py-3.5 text-gray-600">{item.requestedByDisplayName}</td>
               <td className="px-5 py-3.5 text-gray-400 text-xs">{formatPreviewDate(item.requestedAt)}</td>

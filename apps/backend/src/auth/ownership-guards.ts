@@ -53,20 +53,23 @@ import type { Response } from 'express';
 import { ApiErrorCodes, failure } from '../contracts/api-response';
 import { getRequestId } from '../lib/http';
 import {
+  canGenerateReport,
   canManageAssessment,
   canManageEvidence,
   canSubmitAssessment,
   type AssessmentOwnershipContext,
   type EvidenceOwnershipContext,
+  type ReportOwnershipContext,
 } from './ownership';
 import type { RequestActor } from './auth-types';
 
-/** Actions an ownership guard can be invoked for — mirrors Task 3 exactly. */
+/** Actions an ownership guard can be invoked for — mirrors Task 3 exactly, plus PHX-REPORTS-004's 'reports.generate'. */
 export type OwnershipAction =
   | 'assessment.submit'
   | 'evidence.create'
   | 'evidence.update'
-  | 'evidence.delete';
+  | 'evidence.delete'
+  | 'reports.generate';
 
 const OWNERSHIP_FAILURE_MESSAGE =
   'You do not have access to perform this action on this resource.';
@@ -132,6 +135,33 @@ export function requireEvidenceOwnership(
 ): boolean {
   if (!canManageEvidence(actor, evidence)) {
     sendOwnershipFailure(res, action);
+    return false;
+  }
+
+  return true;
+}
+
+/**
+ * PHX-REPORTS-004 — ownership guard for starting/retrying/regenerating a
+ * report (all three Requested/Failed/Expired -> Generating transitions).
+ * Dispatches to canGenerateReport(). Runs STRICTLY AFTER
+ * requirePermission(..., 'reports.generate') has already passed — see
+ * this file's header for the full ordering contract, unchanged for this
+ * new guard. Returns `true` (writes nothing) if the actor may proceed,
+ * or writes a 403 FORBIDDEN and returns `false`. Callers must `return`
+ * immediately when `false` comes back.
+ *
+ * Per Phase 1 Addendum A §1: this same guard is used for all three
+ * transitions (start/retry/regenerate) — Contributor own-only applies
+ * uniformly, not just to retry/regenerate.
+ */
+export function requireReportOwnership(
+  actor: RequestActor,
+  report: ReportOwnershipContext,
+  res: Response
+): boolean {
+  if (!canGenerateReport(actor, report)) {
+    sendOwnershipFailure(res, 'reports.generate');
     return false;
   }
 

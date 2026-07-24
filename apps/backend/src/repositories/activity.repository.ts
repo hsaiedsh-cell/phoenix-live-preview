@@ -84,12 +84,39 @@ export type ActivityType =
   // explicitly in docs/platform/DATA_LIFECYCLE_PHX_PLATFORM_002.md §5's
   // Report Lifecycle table (Requested state, "System event" column),
   // not an invented name.
-  | 'ReportRequested';
+  | 'ReportRequested'
+  // PHX-REPORTS-004: matches the `ReportGenerated` system event in the
+  // same lifecycle table (Available state). Written by the report
+  // generation worker on Generating -> Available success, with
+  // actorUserId: null and actorDisplayName: 'Phoenix System' — see this
+  // input's doc comments below and
+  // docs/reports/PHX_REPORTS_004_IMPLEMENTATION_REPORT.md
+  // §"System actor attribution".
+  | 'ReportGenerated';
 
 export interface RecordActivityInput {
   workspaceId: string;
-  actorUserId: string;
-  /** Denormalized display name — activity_logs.actor_display_name is NOT NULL. */
+  /**
+   * PHX-REPORTS-004: nullable to support system/automated events that
+   * have no human actor (e.g. the report generation worker's
+   * ReportGenerated activity). activity_logs.actor_user_id is, and has
+   * always been, `UUID NULL REFERENCES users(id) ON DELETE SET NULL`
+   * (migration 0001_initial_schema.sql) — this widens only the
+   * TypeScript input type to match a schema capability that already
+   * existed; the INSERT statement below binds this value as a plain
+   * parameter, so `null` flows through to SQL `NULL` with no query-text
+   * change. Every pre-PHX-REPORTS-004 call site continues passing a
+   * real actor.userId string — this is purely additive, no existing
+   * behavior changes.
+   */
+  actorUserId: string | null;
+  /**
+   * Denormalized display name — activity_logs.actor_display_name is NOT
+   * NULL, so this remains a required string even when actorUserId is
+   * null. System/automated events use the literal 'Phoenix System' (see
+   * ReportGenerated above) rather than leaving this blank or omitting
+   * it.
+   */
   actorDisplayName: string;
   type: ActivityType;
   /** A single, pre-composed summary sentence — see file header. */

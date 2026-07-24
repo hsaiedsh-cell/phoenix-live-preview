@@ -45,4 +45,15 @@ export interface Report extends BaseRecord, WorkspaceScoped {
   expiresAt: string | null;
   /** Populated when status is Failed. */
   failureReason?: string;
+  /**
+   * Server/database-controlled generation attempt number for this report.
+   * Starts at 1 (report_version's column DEFAULT — see
+   * apps/backend/db/migrations/0004_report_version.sql) and increments by
+   * exactly 1 on every retry (Failed -> Generating) or regenerate
+   * (Expired -> Generating) transition (PHX-REPORTS-004). Never
+   * client-supplied — every write path that could set this rejects a
+   * client-supplied `version` field outright rather than accepting and
+   * ignoring it (see apps/backend/src/validation/schemas/report.schemas.ts).
+   */
+  version: number;
 }

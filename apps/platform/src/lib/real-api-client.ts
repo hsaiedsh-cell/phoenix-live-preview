@@ -208,8 +208,17 @@ interface BackendEnvelope<T> {
   requestId?: string;
 }
 
-/** Maps a backend error code (ApiErrorCodes) to this file's typed RealApiError. Falls back to the HTTP status when the code is unrecognized. */
-function backendErrorToRealApiError(httpStatus: number, envelopeError: BackendEnvelope<unknown>['error']): RealApiError {
+/**
+ * Maps a backend error code (ApiErrorCodes) to this file's typed
+ * RealApiError. Falls back to the HTTP status when the code is
+ * unrecognized. Exported (PHX-REPORTS-004) so realDownloadReport() in
+ * real-api-client.client.ts — which cannot use realFetch() below, since
+ * a successful download response is raw bytes, not a JSON envelope —
+ * can still map a FAILED download's JSON error envelope through the
+ * exact same mapping every other read/write function in this file
+ * uses, rather than inventing a second, divergent error shape.
+ */
+export function backendErrorToRealApiError(httpStatus: number, envelopeError: BackendEnvelope<unknown>['error']): RealApiError {
   const code = envelopeError?.code ?? 'BACKEND_ERROR';
   const message = envelopeError?.message ?? `Backend error ${httpStatus}`;
   switch (code) {
@@ -694,6 +703,12 @@ export interface BackendReport {
   format: string;
   expiresAt: string | null;
   failureReason: string | null;
+  /**
+   * PHX-REPORTS-004 — server/database-controlled generation attempt
+   * number (reports.report_version). Starts at 1, increments by exactly
+   * 1 on every retry/regenerate. Never client-supplied.
+   */
+  version: number;
   createdAt: string;
   updatedAt: string;
 }

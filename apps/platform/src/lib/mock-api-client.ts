@@ -732,6 +732,8 @@ export async function requestReport(input: RequestReportInput): Promise<ApiResul
     fileUrl: null,
     format: input.format ?? 'pdf',
     expiresAt: null,
+    // PHX-REPORTS-004: a freshly mock-requested report starts at version 1.
+    version: 1,
     createdAt: now,
     updatedAt: now,
     deletedAt: null,

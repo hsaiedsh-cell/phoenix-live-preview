@@ -88,10 +88,25 @@ pnpm dev
 ## 8. QA scripts referenced in this sprint's documentation
 
 These were written for this sprint's QA and are not part of the shipped
-application — they live at the repository root of `apps/backend` during
-development and are not committed (see the clean-archive exclusions in the
-handoff). To reproduce:
-1. Ensure the backend server and a fresh migrated/seeded database are running.
+application — they live at the repository root of `apps/backend` (or
+`apps/platform` for the polling-controller test) during development and are
+not committed (see the clean-archive exclusions in the handoff). To
+reproduce:
+1. Ensure the backend server and a fresh migrated/seeded database are running
+   (not required for `qa-boot-config.ts`, which spawns/kills its own server
+   processes, or `qa-report-polling-controller.ts`, which needs no backend at
+   all).
 2. Adjust the hardcoded seed IDs at the top of a script if your seed data
    differs.
-3. Run with `npx tsx <script-name>.ts` from `apps/backend`.
+3. Run with `npx tsx <script-name>.ts` from `apps/backend` (or
+   `apps/platform` for the polling-controller test).
+
+Post-review addition — three new scripts:
+- `qa-route-registration.ts` (`apps/backend`) — introspects the real Express
+  router stack to confirm each report route is registered exactly once.
+- `qa-boot-config.ts` (`apps/backend`) — real process-level boot tests;
+  spawns the actual server/worker entry points with invalid env vars and
+  asserts on real exit codes.
+- `qa-report-polling-controller.ts` (`apps/platform`) — deterministic
+  fake-timer tests of the bounded polling logic; no backend or browser
+  required.

@@ -76,3 +76,17 @@ this session's stale-process QA-harness issue were caught and corrected).
   handoff `samples/` directory.
 - 6 documentation deliverables under `docs/reports/` + this build report at
   the repository root.
+
+## Post-review fix round (4 blocking issues)
+
+See `docs/reports/PHX_REPORTS_004_QA_REPORT.md` §15 and
+`docs/reports/00_TEST_ACCOUNTING.md`'s addendum for full detail. All 5
+pre-existing live-backend regression suites re-run clean after the fixes
+(28+20+18+19+5 = 90), plus 3 new suites added specifically to cover the fixed
+defects (route registration 6, real process-level boot config 11,
+deterministic polling controller 17 = 34). **Combined total: 124/124.**
+
+The corrected source archive was extracted into a completely separate
+directory and the full static gate (`install --frozen-lockfile`, `type-check`,
+`lint`, `build`) was re-run there independently, confirming the packaging fix
+with real, independent evidence rather than a file-listing check alone.

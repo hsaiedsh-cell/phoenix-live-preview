@@ -281,3 +281,53 @@ with SHA-256 checksums recorded in the final handoff checksums file:
 - `workspace-portfolio-summary.csv` — real portfolio data across all 3 seeded
   assets, showing correct numeric-vs-string cell typing (unquoted numbers,
   quoted strings, truthful blank cells for the unscored asset).
+
+---
+
+## 15. Post-handoff fixes (final ChatGPT architecture/QA review — 4 blocking issues)
+
+Four real, distinct defects were found by review of the original handoff and
+fixed on this branch. See `docs/reports/00_TEST_ACCOUNTING.md`'s addendum for
+the full per-issue root cause and fix description. Summary:
+
+1. **Archive packaging bug** (not a code defect): `--exclude='storage'` matched
+   any path component named "storage," wrongly excluding
+   `apps/backend/src/storage/` (source) along with the intended
+   `apps/backend/storage/` (generated artifacts). Fixed with an anchored
+   exclude path. **Verified by extracting the corrected archive into a
+   separate directory and running the full independent static gate there** —
+   `pnpm install --frozen-lockfile`, `type-check`, `lint`, `build` all passed,
+   proving the fix with real, independent evidence, not a file-listing check
+   alone.
+2. **Duplicate `POST /api/workspaces/:workspaceId/reports` route registration**
+   in `routes/reports.ts` — a real defect, removed. A new static QA check
+   (`qa-route-registration.ts`) introspects the actual Express router stack
+   (not source text) to confirm each of the 5 report routes is registered
+   exactly once — 6/6 passing.
+3. **`ReportDetailPoller.tsx` only ever polled once** — a real defect. The
+   `useEffect` dependency array did not change when a poll returned "still
+   Generating," so React never rescheduled. Fixed by extracting a pure
+   `createPollingController()` (`lib/report-polling-controller.ts`) that
+   schedules its own next tick internally. A deterministic fake-timer test
+   suite (`qa-report-polling-controller.ts`, no browser required) —
+   17/17 passing — includes a test specifically proving multiple real polls
+   occur while status remains Generating (the exact scenario the old code
+   failed), plus max-attempts, error-stop, unmount/stop-cancels-timer,
+   no-overlapping-requests, and reset-after-action coverage.
+4. **Backend boot never validated report-worker configuration** — a real gap.
+   `assertReportWorkerConfigSafe()` is now called in `src/index.ts` before
+   `app.listen()`. Real **process-level** boot tests (`qa-boot-config.ts`) —
+   actual child-process spawns of the real server and both worker entry
+   points with invalid env vars, asserting on real exit codes/stderr —
+   11/11 passing, covering all 4 invariants for all 3 entry points plus
+   valid-config-starts.
+
+All previously-passing suites (`qa-full`, `qa-lifecycle`, `qa-edge-cases`,
+`qa-storage-security`, `test-invariants`) were re-run against the fixed code
+and remain clean: 28/28, 20/20, 18/18, 19/19, 5/5 respectively. Combined with
+the 3 new suites (6+11+17 = 34), the total real, currently-passing check count
+across this sprint's QA is **124**.
+
+The root static gate (`pnpm install --frozen-lockfile && pnpm type-check &&
+pnpm lint && pnpm build`) was re-run clean after these fixes, both against the
+working checkout and (separately) against the corrected extracted archive.

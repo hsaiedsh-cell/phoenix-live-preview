@@ -30,11 +30,20 @@
 // authority; a denied action surfaces as a sanitized inline 403 message
 // here, never a client-side-hidden button.
 //
-// ---- Bounded polling --------------------------------------------------
-// Stops on: reaching a terminal/non-Generating status, hitting
-// MAX_POLL_ATTEMPTS, an error response, or component unmount (the
-// effect's cleanup clears the timer in every case) — never an
-// unbounded loop.
+// ---- Bounded polling (see lib/report-polling-controller.ts) -----------
+// Uses createPollingController(), a pure, framework-free polling loop
+// that schedules its OWN next tick from inside itself for as long as
+// the latest fetched status is non-terminal — fixing a real bug found
+// during ChatGPT architecture/QA review: the original implementation
+// scheduled exactly one setTimeout inside a useEffect keyed on
+// [report.status, report.id], which never re-ran once the status
+// value stopped changing (i.e. stayed 'Generating' across a poll),
+// silently stopping after the first tick. See that file's header for
+// the full contract this controller guarantees: stops on Requested/
+// Available/Failed/Expired, stops after MAX_POLL_ATTEMPTS, stops on
+// fetch error, stops on unmount, never overlaps requests, and resets
+// cleanly on every start() call (used here after Start/Retry/
+// Regenerate).
 //
 // ---- No storage key/path/hash/internal detail ever reaches this file --
 // Every value rendered here comes from BackendReport (the canonical,
@@ -50,6 +59,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { BackendReport } from '@/lib/real-api-client';
 import { realGenerateReport, realGetReportDetail, realDownloadReport } from '@/lib/real-api-client.client';
 import { RealApiError } from '@/lib/real-api-client';
+import { createPollingController } from '@/lib/report-polling-controller';
 
 const POLL_INTERVAL_MS = 3000;
 const MAX_POLL_ATTEMPTS = 30; // 30 * 3s = 90s bounded polling window.
@@ -63,64 +73,85 @@ function formatDate(value: string | null): string {
   return value.slice(0, 10);
 }
 
+function isNonTerminalStatus(report: BackendReport): boolean {
+  return report.status === 'Generating';
+}
+
 export function ReportDetailPoller({ initial }: ReportDetailPollerProps) {
   const [report, setReport] = useState<BackendReport>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const pollAttemptsRef = useRef(0);
-  const unmountedRef = useRef(false);
 
-  useEffect(() => {
-    unmountedRef.current = false;
-    return () => {
-      unmountedRef.current = true;
-    };
-  }, []);
+  // The controller instance and the report id/status it was built for
+  // are held in refs, not state — the polling loop itself must not be
+  // recreated on every render (only when the report id changes, or when
+  // we explicitly (re)start it after an action).
+  const controllerRef = useRef<ReturnType<typeof createPollingController<BackendReport>> | null>(null);
+  const reportIdRef = useRef(report.id);
 
-  // Bounded polling while Generating.
+  function buildController(reportId: string) {
+    return createPollingController<BackendReport>({
+      intervalMs: POLL_INTERVAL_MS,
+      maxAttempts: MAX_POLL_ATTEMPTS,
+      isTerminal: (result) => !isNonTerminalStatus(result),
+      fetchLatest: () => realGetReportDetail(reportId),
+      onUpdate: (latest) => setReport(latest),
+      onError: () => {
+        // A poll error stops polling for this row rather than retrying
+        // indefinitely — the row simply keeps its last-known status;
+        // the next user-triggered action (or a page refresh) reflects
+        // the true current state. No raw error is surfaced for a
+        // background poll tick.
+      },
+      onMaxAttemptsReached: () => setError('Still generating — check back shortly.'),
+    });
+  }
+
+  // (Re)build and (re)start the controller whenever the report id
+  // changes (a new row) or the status becomes 'Generating' (a fresh
+  // generation attempt, whether from the initial server-rendered state
+  // or from a client-triggered action) — and stop it whenever the
+  // status is anything else. Stopping is idempotent, so this effect is
+  // safe to run on every relevant status change without double-starting.
   useEffect(() => {
-    if (report.status !== 'Generating') {
-      pollAttemptsRef.current = 0;
+    reportIdRef.current = report.id;
+
+    if (!isNonTerminalStatus(report)) {
+      controllerRef.current?.stop();
       return;
     }
 
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      if (cancelled || unmountedRef.current) return;
-      pollAttemptsRef.current += 1;
-
-      try {
-        const latest = await realGetReportDetail(report.id);
-        if (cancelled || unmountedRef.current) return;
-        setReport(latest);
-        // Stops automatically on the next effect run once status !== 'Generating'.
-      } catch {
-        // A poll error stops polling for this row rather than retrying
-        // indefinitely — the row simply keeps its last-known status; the
-        // next user-triggered action (or a page refresh) will reflect
-        // the true current state. No raw error is surfaced for a
-        // background poll tick.
-        if (!cancelled && !unmountedRef.current) pollAttemptsRef.current = MAX_POLL_ATTEMPTS;
-      }
-
-      if (pollAttemptsRef.current >= MAX_POLL_ATTEMPTS && !cancelled && !unmountedRef.current) {
-        setError('Still generating — check back shortly.');
-      }
-    }, POLL_INTERVAL_MS);
+    const controller = buildController(report.id);
+    controllerRef.current = controller;
+    controller.start();
 
     return () => {
-      cancelled = true;
-      clearTimeout(timer);
+      controller.stop();
     };
-  }, [report.status, report.id]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [report.id, report.status]);
+
+  // Unconditional unmount safety net — stops any in-flight controller
+  // even if the effect above's own cleanup somehow did not run first.
+  useEffect(() => {
+    return () => {
+      controllerRef.current?.stop();
+    };
+  }, []);
 
   async function handleGenerateAction() {
     setBusy(true);
     setError(null);
     try {
       const updated = await realGenerateReport(report.id);
+      // Explicitly stop any existing controller before applying the
+      // update — the effect above will build and start a fresh one
+      // (fresh attempt budget) once `updated.status` renders as
+      // 'Generating', but stopping here first guarantees no stale
+      // in-flight poll from the PRIOR generation attempt can race the
+      // new one.
+      controllerRef.current?.stop();
       setReport(updated);
-      pollAttemptsRef.current = 0;
     } catch (err) {
       setError(err instanceof RealApiError ? err.message : 'This action could not be completed. Please try again.');
     } finally {

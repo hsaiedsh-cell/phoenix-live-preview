@@ -178,3 +178,31 @@ self-healing).
    independently.
 4. Remove the local artifact storage directory (`apps/backend/storage/` by
    default) if disk cleanup is desired — it is never committed to Git.
+
+---
+
+## 9. Post-handoff fixes (final ChatGPT architecture/QA review)
+
+Four real, distinct defects were found and fixed on this branch after the
+original handoff — see `docs/reports/PHX_REPORTS_004_QA_REPORT.md` §15 and
+`docs/reports/00_TEST_ACCOUNTING.md`'s addendum for full detail. File-level
+summary:
+
+### Changed (fix round)
+- `apps/backend/src/index.ts` — now calls `assertReportWorkerConfigSafe()`
+  before `app.listen()`, matching the existing `assertAuthModeSafeToBoot()`
+  pattern exactly.
+- `apps/backend/src/routes/reports.ts` — removed a full duplicate
+  `POST /api/workspaces/:workspaceId/reports` registration (176 lines) that
+  had been left in place by an earlier edit.
+- `apps/platform/src/components/ReportDetailPoller.tsx` — rewired to use the
+  new `createPollingController()` instead of a broken single-shot
+  `useEffect`-scheduled timer.
+
+### Added (fix round)
+- `apps/platform/src/lib/report-polling-controller.ts` — the extracted, pure,
+  framework-free bounded polling logic.
+
+No database, API contract, or rendering behavior changed in this fix round —
+all four fixes are structural/correctness fixes to code already described in
+§1–§8 above; no new endpoint, template, or lifecycle rule was introduced.

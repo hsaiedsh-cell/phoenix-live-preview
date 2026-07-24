@@ -769,6 +769,7 @@ export async function previewGetReports(workspaceId: string): Promise<BackendPag
     format: string;
     expires_at: string | null;
     failure_reason: string | null;
+    report_version: number;
     created_at: string;
     updated_at: string;
   }>(
@@ -789,6 +790,7 @@ export async function previewGetReports(workspaceId: string): Promise<BackendPag
        r.format                 AS format,
        r.expires_at             AS expires_at,
        r.failure_reason         AS failure_reason,
+       r.report_version         AS report_version,
        r.created_at             AS created_at,
        r.updated_at             AS updated_at
      FROM reports r
@@ -819,6 +821,7 @@ export async function previewGetReports(workspaceId: string): Promise<BackendPag
     format: row.format,
     expiresAt: row.expires_at,
     failureReason: row.failure_reason,
+    version: row.report_version,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   }));

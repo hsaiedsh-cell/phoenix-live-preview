@@ -36,6 +36,7 @@ import { getBackendAuthHeaders } from './auth/platform-auth.client';
 import {
   realFetch,
   realPost,
+  backendErrorToRealApiError,
   RealApiConfigError,
   RealApiAuthRequiredError,
   type BackendPaginatedResult,
@@ -46,6 +47,7 @@ import {
   type BackendAssessmentDetail,
   type BackendEvidenceItem,
   type BackendScore,
+  type BackendReport,
   type CreateReportRequestInput,
   type CreateReportRequestResult,
 } from './real-api-client';
@@ -167,4 +169,110 @@ export async function realCreateReportRequest(
   input: CreateReportRequestInput
 ): Promise<CreateReportRequestResult> {
   return clientPost<CreateReportRequestResult>(`/api/workspaces/${encodeURIComponent(workspaceId)}/reports`, input);
+}
+
+// ---------------------------------------------------------------------------
+// PHX-REPORTS-004 — live Reports list/detail/generate/download, called
+// from the new action-aware Reports UI (LiveReportsActionTable.tsx,
+// ReportDetailPoller.tsx). All client-side, since these are the
+// functions a browser interaction (button click, poll tick) triggers
+// directly — the initial page-load list read still goes through
+// real-api-client.server.ts via platform-data-source.ts, matching every
+// other migrated page's Server Component-first pattern; only the
+// POST-triggering/polling/downloading actions live here.
+// ---------------------------------------------------------------------------
+
+/** GET /api/workspaces/:workspaceId/reports — client-side variant, used only if a client-triggered refresh is needed beyond the initial server-rendered list (not currently called; kept symmetric with real-api-client.server.ts's realGetReports for future use). */
+export async function realGetReports(workspaceId: string): Promise<BackendPaginatedResult<BackendReport>> {
+  return clientFetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/reports`);
+}
+
+/** GET /api/reports/:reportId — used by ReportDetailPoller.tsx's bounded polling loop while a report is Generating, and by action components to refresh a single row's state after a POST. */
+export async function realGetReportDetail(reportId: string): Promise<BackendReport> {
+  return clientFetch<BackendReport>(`/api/reports/${encodeURIComponent(reportId)}`);
+}
+
+/**
+ * POST /api/reports/:reportId/generate — starts, retries, or
+ * regenerates a report depending on its current status (the backend
+ * resolves which transition applies; this function sends no body at
+ * all, matching the endpoint's contract — see
+ * apps/backend/src/routes/reports.ts's generate handler doc comment:
+ * "client may not supply version/status/storage/timestamp fields").
+ * Throws RealApiError (mapped from the backend's 403/404/409 responses)
+ * on failure — callers render this via the same sanitized inline
+ * error pattern every other real-mode write already uses in this
+ * codebase; NEVER pre-checked client-side (see
+ * LiveReportsActionTable.tsx's header comment on why there is no
+ * client-side role/ownership gate here).
+ */
+export async function realGenerateReport(reportId: string): Promise<BackendReport> {
+  const headers = await resolveClientAuthHeaders();
+  const { baseUrl } = getPhoenixApiConfig();
+  const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/generate`, {
+    method: 'POST',
+    headers,
+  });
+
+  let envelope: { ok: boolean; data?: BackendReport; error?: { code?: string; message?: string } } | null = null;
+  try {
+    envelope = await response.json();
+  } catch {
+    envelope = null;
+  }
+
+  if (!response.ok || !envelope?.ok) {
+    throw backendErrorToRealApiError(response.status, envelope?.error);
+  }
+
+  return envelope.data as BackendReport;
+}
+
+export interface RealDownloadResult {
+  blob: Blob;
+  filename: string;
+}
+
+/**
+ * GET /api/reports/:reportId/download — authenticated binary download.
+ * Deliberately does NOT use realFetch() (that function always parses
+ * the response as a JSON envelope; a successful download response here
+ * is raw artifact bytes, not JSON). Resolves the SAME auth headers
+ * every other client function in this file uses, reads the filename
+ * from the backend's Content-Disposition header (never invented
+ * client-side), and returns a Blob for the caller to trigger a browser
+ * save from via a temporary object URL — never a plain `<a href>`
+ * pointing at the backend URL directly, which would send no auth
+ * header at all and therefore always fail against this backend.
+ *
+ * On a non-2xx response, parses the JSON error envelope (the backend
+ * sends one for every failure path, including the integrity-failure
+ * case) and throws the same RealApiError shape every other function
+ * here throws — callers do not need a separate error-handling path for
+ * downloads.
+ */
+export async function realDownloadReport(reportId: string): Promise<RealDownloadResult> {
+  const headers = await resolveClientAuthHeaders();
+  const { baseUrl } = getPhoenixApiConfig();
+  const response = await fetch(`${baseUrl}/api/reports/${encodeURIComponent(reportId)}/download`, {
+    method: 'GET',
+    headers,
+  });
+
+  if (!response.ok) {
+    let envelope: { error?: { code?: string; message?: string } } | null = null;
+    try {
+      envelope = await response.json();
+    } catch {
+      envelope = null;
+    }
+    throw backendErrorToRealApiError(response.status, envelope?.error);
+  }
+
+  const disposition = response.headers.get('content-disposition') ?? '';
+  const filenameMatch = /filename="([^"]+)"/.exec(disposition);
+  const filename = filenameMatch?.[1] ?? 'report';
+
+  const blob = await response.blob();
+  return { blob, filename };
 }

@@ -39,6 +39,7 @@ import {
   type BackendAssessmentDetail,
   type BackendEvidenceItem,
   type BackendScore,
+  type BackendReport,
 } from './real-api-client';
 
 /**
@@ -158,4 +159,18 @@ export async function realGetAssessmentEvidence(
  */
 export async function realGetAssessmentScore(assessmentId: string): Promise<BackendScore | null> {
   return serverFetch<BackendScore | null>(`/api/assessments/${encodeURIComponent(assessmentId)}/score`);
+}
+
+// ---------------------------------------------------------------------------
+// PHX-REPORTS-004 — real-dev/production-auth live Reports reads.
+// ---------------------------------------------------------------------------
+
+/** GET /api/workspaces/:workspaceId/reports. */
+export async function realGetReports(workspaceId: string): Promise<BackendPaginatedResult<BackendReport>> {
+  return serverFetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/reports`);
+}
+
+/** GET /api/reports/:reportId. */
+export async function realGetReportDetail(reportId: string): Promise<BackendReport> {
+  return serverFetch<BackendReport>(`/api/reports/${encodeURIComponent(reportId)}`);
 }

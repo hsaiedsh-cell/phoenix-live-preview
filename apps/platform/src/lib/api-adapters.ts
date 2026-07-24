@@ -381,6 +381,9 @@ export function mapSampleReportToReport(r: PhoenixReport): Report {
     fileUrl: isAvailable ? `/mock-reports/${r.id}.pdf` : null,
     format: 'pdf',
     expiresAt: null,
+    // PHX-REPORTS-004: mock/sample data has no real generation lifecycle,
+    // so it is always presented as the first (and only) attempt.
+    version: 1,
     createdAt: generatedAt ?? now,
     updatedAt: generatedAt ?? now,
     deletedAt: null,

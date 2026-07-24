@@ -235,3 +235,14 @@ export const ASSESSMENT_STATUSES = [
 ] as const;
 
 export type AssessmentStatus = (typeof ASSESSMENT_STATUSES)[number];
+
+/**
+ * ReportStatus values — matches @phoenix/core's ReportStatus enum and
+ * reports.status's application-level lifecycle exactly (no CHECK
+ * constraint exists on this column at the database level; this
+ * allow-list is the validation-layer source of truth for what a client
+ * may filter by). PHX-REPORTS-004.
+ */
+export const REPORT_STATUSES = ['Requested', 'Generating', 'Available', 'Expired', 'Failed'] as const;
+
+export type ReportStatus = (typeof REPORT_STATUSES)[number];

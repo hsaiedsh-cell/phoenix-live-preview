@@ -19,6 +19,7 @@ import type { Request, Response } from 'express';
 import { sendValidationError } from './validation-response';
 import {
   ASSESSMENT_STATUSES,
+  REPORT_STATUSES,
   validateLimit,
   validateOptionalStatus,
   validateOptionalString,
@@ -202,5 +203,50 @@ export function parseAuditListQuery(req: Request, res: Response): AuditListQuery
     entityType: entityTypeResult.ok ? entityTypeResult.value : undefined,
     entityId: entityIdResult.ok ? entityIdResult.value : undefined,
     action: actionResult.ok ? actionResult.value : undefined,
+  };
+}
+
+// ============================================================
+// PHX-REPORTS-004 — Report Generation Lifecycle & Secure Artifact
+// Delivery Foundation
+// ------------------------------------------------------------
+// Route param/query parsers for the four report endpoints this sprint
+// implements. Same "validate before any database call, 400 on failure"
+// contract as every helper above.
+// ============================================================
+
+/** Validates req.params.reportId. Same contract as parseAssessmentId/parseEvidenceId above. */
+export function parseReportId(req: Request, res: Response): string | null {
+  const result = validateUuid(req.params.reportId, 'reportId');
+  if (!result.ok) {
+    sendValidationError(res, result.error);
+    return null;
+  }
+  return result.value;
+}
+
+export interface ReportListQuery {
+  status?: string;
+  limit: number;
+}
+
+/** Validates the `status` and `limit` query params for GET /api/workspaces/:workspaceId/reports. Same shape/contract as parseAssessmentListQuery. */
+export function parseReportListQuery(req: Request, res: Response): ReportListQuery | null {
+  const statusResult = validateOptionalStatus(req.query.status, REPORT_STATUSES, 'status');
+  const limitResult = validateLimit(req.query.limit, { fieldName: 'limit' });
+
+  const issues = [
+    ...(statusResult.ok ? [] : [statusResult.error]),
+    ...(limitResult.ok ? [] : [limitResult.error]),
+  ];
+
+  if (issues.length > 0) {
+    sendValidationError(res, issues);
+    return null;
+  }
+
+  return {
+    status: statusResult.ok ? statusResult.value : undefined,
+    limit: limitResult.ok ? limitResult.value : 25,
   };
 }

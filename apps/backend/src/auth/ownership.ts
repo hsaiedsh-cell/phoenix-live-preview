@@ -87,6 +87,21 @@
 import type { RequestActor } from './auth-types';
 
 /**
+ * PHX-REPORTS-004 — the minimal report ownership fields
+ * canGenerateReport() below needs. Mirrors AssessmentOwnershipContext's
+ * shape/purpose exactly, for the same reason: deliberately narrower than
+ * the full canonical report read model (see
+ * repositories/reports.repository.ts), just the fields an ownership
+ * decision actually depends on.
+ */
+export interface ReportOwnershipContext {
+  reportId: string;
+  workspaceId: string;
+  requestedByUserId: string;
+  status: string;
+}
+
+/**
  * The minimal assessment ownership fields every predicate below needs.
  * Deliberately narrower than the full AssessmentDetail/AssessmentListItem
  * shapes already defined in repositories/assessments.repository.ts — see
@@ -202,6 +217,39 @@ export function canManageEvidence(
         evidence.uploadedByUserId === actor.userId ||
         evidence.assessmentRequestedByUserId === actor.userId
       );
+    case 'Viewer':
+    case 'Auditor':
+    default:
+      return false;
+  }
+}
+
+/**
+ * PHX-REPORTS-004 — true if `actor` may start, retry, or regenerate
+ * `report` (i.e. drive any of the three Requested/Failed/Expired ->
+ * Generating transitions), based on ownership alone. Callers must have
+ * already confirmed the actor's role carries 'reports.generate' via
+ * requirePermission() — this function only adds the "own resource"
+ * nuance permissions.ts's role-only matrix does not express.
+ *
+ * Per Phase 1 Addendum A §1 (ChatGPT architecture/QA correction):
+ * Contributor is own-only for ALL THREE transitions — starting a report
+ * they did not request is rejected exactly like retrying/regenerating
+ * one they did not request. There is deliberately one function covering
+ * all three transitions (unlike canManageAssessment/canSubmitAssessment
+ * above, kept as two exports per that task's own brief even though their
+ * Contributor rule was identical) — this task's brief and Addendum A
+ * both describe one uniform ownership rule across start/retry/
+ * regenerate, so one function is the accurate mapping.
+ */
+export function canGenerateReport(actor: RequestActor, report: ReportOwnershipContext): boolean {
+  switch (actor.role) {
+    case 'Owner':
+    case 'Admin':
+    case 'Reviewer':
+      return true;
+    case 'Contributor':
+      return report.requestedByUserId === actor.userId;
     case 'Viewer':
     case 'Auditor':
     default:

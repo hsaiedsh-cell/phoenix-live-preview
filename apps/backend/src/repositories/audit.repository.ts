@@ -96,14 +96,45 @@ export type AuditAction =
   // verbatim ("Write an audit event: report.requested"). Matches the
   // dot-separated lowercase convention every action above already
   // uses.
-  | 'report.requested';
+  | 'report.requested'
+  // PHX-REPORTS-004 — see docs/platform/DATA_LIFECYCLE_PHX_PLATFORM_002.md
+  // §5's Report Lifecycle table / PHX-REPORTS-004 task brief §7's
+  // Expected State and Audit Model for the exact transition -> action
+  // mapping. All six are request- or system-triggered per that table;
+  // see RecordAuditInput.actorUserId's doc comment below for which is
+  // which.
+  | 'report.generation.started'
+  | 'report.generation.retried'
+  | 'report.regenerated'
+  | 'report.generated'
+  | 'report.generation.failed'
+  | 'report.expired';
 
 /** A single field's [before, after] pair — the atom `changes` is built from. */
 export type FieldChange = [before: unknown, after: unknown];
 
 export interface RecordAuditInput {
   workspaceId: string;
-  actorUserId: string;
+  /**
+   * PHX-REPORTS-004: nullable to support system/automated audit events
+   * that have no human actor. audit_records.actor_user_id is, and has
+   * always been, `UUID NULL REFERENCES users(id) ON DELETE SET NULL`
+   * (migration 0001_initial_schema.sql) — this widens only the
+   * TypeScript input type to match a schema capability that already
+   * existed; the INSERT statement below binds this value as a plain
+   * parameter, so `null` flows through to SQL `NULL` with no query-text
+   * change. Every pre-PHX-REPORTS-004 call site continues passing a
+   * real actor.userId string — this is purely additive, no existing
+   * behavior changes.
+   *
+   * Attribution by trigger (PHX-REPORTS-004 task brief §7 / Phase 1
+   * Addendum A §2): 'report.requested' (existing), 'report.generation.started',
+   * 'report.generation.retried', and 'report.regenerated' are all
+   * request-triggered -> real actor.userId. 'report.generated',
+   * 'report.generation.failed' (worker-triggered), and 'report.expired'
+   * (automatic lazy-expiry) are all system-triggered -> null.
+   */
+  actorUserId: string | null;
   action: AuditAction;
   entityType: string;
   entityId: string;

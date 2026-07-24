@@ -9,14 +9,15 @@
     "type-check": "pnpm --filter=./apps/* type-check"
   },
   "engines": {
-    "node": ">=18.0.0",
+    "node": ">=20.9.0",
     "pnpm": ">=8.0.0"
   },
   "pnpm": {
     "overrides": {
       "postcss": "8.5.16",
       "brace-expansion@1": "1.1.16",
-      "brace-expansion@2": "2.1.2"
+      "brace-expansion@2": "2.1.2",
+      "next@15.5.21>sharp": "0.35.3"
     }
   }
 }

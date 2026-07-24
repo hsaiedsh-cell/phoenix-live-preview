@@ -136,6 +136,27 @@ export async function realGetWorkspaceAuditRecords(
   return clientFetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/audit-records`);
 }
 
+// ---------------------------------------------------------------------------
+// PHX-BACKEND-009B — assessment-scoped Activity/Audit reads. Same
+// clientFetch<T>() pattern as every function in this file; symmetric
+// with real-api-client.server.ts's realGetAssessmentActivity()/
+// realGetAssessmentAuditRecords(). Not called by any page this sprint
+// (see file header — no platform page reads from a Client Component
+// yet), kept here so a future client-side fetch has the correct seam.
+// ---------------------------------------------------------------------------
+
+export async function realGetAssessmentActivity(
+  assessmentId: string
+): Promise<BackendPaginatedResult<BackendActivityItem>> {
+  return clientFetch(`/api/assessments/${encodeURIComponent(assessmentId)}/activity`);
+}
+
+export async function realGetAssessmentAuditRecords(
+  assessmentId: string
+): Promise<BackendPaginatedResult<BackendAuditRecord>> {
+  return clientFetch(`/api/assessments/${encodeURIComponent(assessmentId)}/audit-records`);
+}
+
 export async function realGetAssessmentDetail(assessmentId: string): Promise<BackendAssessmentDetail> {
   return clientFetch<BackendAssessmentDetail>(`/api/assessments/${encodeURIComponent(assessmentId)}`);
 }

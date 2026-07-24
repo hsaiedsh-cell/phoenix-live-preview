@@ -12,6 +12,7 @@ import { LiveEvidenceList } from '@/components/LiveEvidenceList';
 import { LiveDataBadge, renderDataStatePanel } from '@/components/DataStatePanel';
 import { AuditTrailPreview } from '@/components/AuditTrailPreview';
 import { ActivityTimeline } from '@/components/ActivityTimeline';
+import { LiveActivityList, LiveAuditList } from '@/components/LiveActivityAuditLists';
 import { AlphaNotice } from '@/components/AlphaNotice';
 import { RoleGate } from '@/components/RoleGate';
 import { RestrictedNote } from '@/components/RestrictedNote';
@@ -181,11 +182,26 @@ export default async function AssessmentDetailPage({ params }: AssessmentDetailP
             <LiveEvidenceList items={result.data.evidence} />
           </div>
 
-          <p className="text-xs text-gray-400">
-            Audit trail and activity timeline are not shown on this page in real-dev/production-auth mode: the
-            backend currently exposes activity/audit at the workspace level only (see /settings), not scoped to a
-            single assessment — assessment-scoped activity/audit endpoints are deferred to PHX-BACKEND-009B.
-          </p>
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div>
+              <h2 className="text-base font-bold text-phx-navy mb-4">Audit Trail</h2>
+              {/* PHX-BACKEND-009B: assessment-scoped audit requires
+                  audit.read (Owner/Admin/Auditor only). A 403 here is
+                  isolated by loadAssessmentDetailData() — it never
+                  prevents Assessment/Score/Evidence/Activity above from
+                  rendering; only this section falls back to a
+                  RestrictedNote. */}
+              {result.data.auditAccess === 'restricted' ? (
+                <RestrictedNote permission="canViewAuditTrail" />
+              ) : (
+                <LiveAuditList items={result.data.auditRecords} />
+              )}
+            </div>
+            <div>
+              <h2 className="text-base font-bold text-phx-navy mb-4">Activity Timeline</h2>
+              <LiveActivityList items={result.data.activity} />
+            </div>
+          </div>
         </>
       ) : (
         renderDataStatePanel(

@@ -207,6 +207,40 @@ export function parseAuditListQuery(req: Request, res: Response): AuditListQuery
 }
 
 // ============================================================
+// PHX-BACKEND-009B — Assessment-Scoped Activity & Audit Read Endpoints
+// ------------------------------------------------------------
+// Query param parser for GET /api/assessments/:assessmentId/activity
+// and GET /api/assessments/:assessmentId/audit-records. Deliberately
+// narrower than parseActivityListQuery()/parseAuditListQuery() above
+// (workspace-level): only `limit` is accepted — no entityType/entityId/
+// type/action/workspaceId — per task brief §3.2 ("Do not accept
+// client-controlled entityType/entityId/workspaceId. The assessment and
+// workspace scope must be derived from the path assessment ID and
+// database relationships."). Same default/min/max (25 / 1 / 100) via
+// the shared validateLimit() helper.
+// ============================================================
+
+export interface AssessmentScopedListQuery {
+  limit: number;
+}
+
+/**
+ * Validates only `limit` for the two assessment-scoped read endpoints.
+ * Returns the normalized query on success, or writes a 400
+ * VALIDATION_ERROR and returns null on failure.
+ */
+export function parseAssessmentScopedListQuery(req: Request, res: Response): AssessmentScopedListQuery | null {
+  const limitResult = validateLimit(req.query.limit, { fieldName: 'limit' });
+
+  if (!limitResult.ok) {
+    sendValidationError(res, [limitResult.error]);
+    return null;
+  }
+
+  return { limit: limitResult.value };
+}
+
+// ============================================================
 // PHX-REPORTS-004 — Report Generation Lifecycle & Secure Artifact
 // Delivery Foundation
 // ------------------------------------------------------------

@@ -314,3 +314,73 @@ export async function listWorkspaceActivity(
   const items = result.rows.map(mapActivityLogListRow);
   return { items, total: items.length };
 }
+
+// ============================================================
+// PHX-BACKEND-009B — Assessment-Scoped Activity & Audit Read Endpoints
+// ------------------------------------------------------------
+// Read path for GET /api/assessments/:assessmentId/activity. Scopes to
+// one Assessment plus its child Evidence items, rather than an entire
+// Workspace — see listWorkspaceActivity() above for the general
+// pattern this mirrors (same parameterized-SQL-only discipline, same
+// clamp/mapping helpers, same items.length `total` convention).
+//
+// Scope match: `related_entity_type = 'Assessment' AND
+// related_entity_id = :assessmentId`, OR `related_entity_type =
+// 'Evidence' AND related_entity_id IN (SELECT id FROM evidence_items
+// WHERE assessment_id = :assessmentId)`. The inner evidence_items
+// subquery deliberately does NOT filter `deleted_at IS NULL` — a
+// soft-deleted Evidence item's id must still match so its full
+// activity history (including the EvidenceDeleted row itself) remains
+// visible, per task brief §3.5. `workspace_id = $1` is enforced
+// defense-in-depth even though every related_entity_id already only
+// ever points at an entity inside its own recorded workspace (see
+// routes/assessments.ts's write call sites, which always pass the
+// same workspaceId used for the corresponding recordActivity() call);
+// this still prevents any leakage if that invariant were ever violated
+// by a future call site.
+// ============================================================
+
+export interface ListAssessmentActivityInput {
+  workspaceId: string;
+  assessmentId: string;
+  limit: number;
+}
+
+/**
+ * Lists activity_logs rows scoped to one Assessment (the Assessment's
+ * own events plus its child Evidence items' events), most recent
+ * first, excluding activity_logs rows already soft-deleted
+ * (deleted_at IS NULL — unrelated to whether the referenced Evidence
+ * itself is deleted, see file header). Deleted-Evidence history is
+ * retained (no evidence_items.deleted_at filter — see file header).
+ */
+export async function listAssessmentActivity(
+  input: ListAssessmentActivityInput
+): Promise<{ items: ActivityLogListItem[]; total: number }> {
+  const db = getDatabasePool();
+  const limit = clampActivityLimit(input.limit);
+
+  const result = await db.query<ActivityLogListRow>(
+    `SELECT
+       id, workspace_id, type, actor_user_id, actor_display_name, summary,
+       related_entity_type, related_entity_id, created_at, updated_at
+     FROM activity_logs
+     WHERE workspace_id = $1
+       AND deleted_at IS NULL
+       AND (
+         (related_entity_type = 'Assessment' AND related_entity_id = $2)
+         OR (
+           related_entity_type = 'Evidence'
+           AND related_entity_id IN (
+             SELECT id FROM evidence_items WHERE assessment_id = $2
+           )
+         )
+       )
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [input.workspaceId, input.assessmentId, limit]
+  );
+
+  const items = result.rows.map(mapActivityLogListRow);
+  return { items, total: items.length };
+}

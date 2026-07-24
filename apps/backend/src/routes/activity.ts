@@ -48,8 +48,14 @@ import { asyncHandler, getRequestId } from '../lib/http';
 import { ApiErrorCodes, failure, success } from '../contracts/api-response';
 import { requireDatabase } from '../middleware/database-required';
 import { workspaceExists } from '../repositories/workspaces.repository';
-import { listWorkspaceActivity } from '../repositories/activity.repository';
-import { parseActivityListQuery, parseWorkspaceId } from '../validation/route-params';
+import { listWorkspaceActivity, listAssessmentActivity } from '../repositories/activity.repository';
+import { assessmentExists, getWorkspaceIdForAssessment } from '../repositories/assessments.repository';
+import {
+  parseActivityListQuery,
+  parseAssessmentId,
+  parseAssessmentScopedListQuery,
+  parseWorkspaceId,
+} from '../validation/route-params';
 import { getRequestUserId, requirePermission } from '../auth/request-actor';
 
 export const activityRouter = Router();
@@ -92,13 +98,89 @@ activityRouter.get(
   })
 );
 
-// ---- Task 7: assessment-scoped activity endpoint — deferred ----------
-// GET /api/assessments/:assessmentId/activity is NOT implemented this
-// sprint. The task brief marks it optional ("only if low-risk") and
-// instructs "if not implemented: leave as 501 or not present... do not
-// add if it complicates route structure." No stub route existed for
-// this path before this sprint (it was never part of the
-// PHX-BACKEND-001 stub surface), so nothing is added here — see
-// docs/backend/PHX_BACKEND_008_IMPLEMENTATION_REPORT.md
-// §"Optional assessment-scoped endpoints — deferred" for the documented
-// future path.
+// ============================================================
+// PHX-BACKEND-009B — Assessment-Scoped Activity & Audit Read Endpoints
+// ------------------------------------------------------------
+// GET /api/assessments/:assessmentId/activity — the assessment-scoped
+// counterpart to the workspace-level route above, deferred by
+// PHX-BACKEND-008 (see the removed comment this replaces). Returns
+// activity for the target Assessment plus its child Evidence items
+// (see repositories/activity.repository.ts's listAssessmentActivity()
+// for the exact scope-match rule).
+//
+// ---- Permission decision -----------------------------------------------
+// Uses `assessment.read` (approved per task brief §3.6), NOT
+// `audit.read` — deliberately different from the workspace-level
+// Activity route above. `assessment.read` is granted to all six roles
+// (Owner/Admin/Reviewer/Contributor/Viewer/Auditor — see
+// auth/permissions.ts), matching the approved Activity role matrix
+// exactly. This does not change the workspace-level route's own
+// audit.read requirement.
+//
+// ---- Query scope --------------------------------------------------------
+// Only `?limit=` is accepted (parseAssessmentScopedListQuery()) — no
+// client-controlled entityType/entityId/workspaceId, per task brief
+// §3.2. The workspace scope is derived exclusively from the path
+// assessmentId via getWorkspaceIdForAssessment(), never trusted from
+// the client.
+//
+// ---- Request-processing order (identical shape to every route in this
+//      backend, and to the exact order specified in the task brief):
+//   1. assessmentId path param validated (400)
+//   2. limit query param validated (400)
+//   3. actor source validated (401/400/501/503) — BEFORE any DB call
+//   4. requireDatabase() (503)
+//   5. assessmentExists() — 404 if the Assessment does not exist
+//   6. getWorkspaceIdForAssessment() — 404 on the race where the
+//      Assessment was soft-deleted between step 5 and here (identical
+//      two-call pattern already used by the existing
+//      POST /api/assessments/:assessmentId/submit route)
+//   7. requirePermission() enforces assessment.read in the RESOLVED
+//      workspace (401 unknown user / 403 no membership / 403 role
+//      lacking permission) — never a client-supplied workspace id
+//   8. the scoped read
+//   9. the existing success envelope ({ items, total, cursor: null })
+// ============================================================
+
+// GET /api/assessments/:assessmentId/activity
+activityRouter.get(
+  '/assessments/:assessmentId/activity',
+  asyncHandler(async (req, res) => {
+    const assessmentId = parseAssessmentId(req, res);
+    if (assessmentId === null) return;
+
+    const query = parseAssessmentScopedListQuery(req, res);
+    if (query === null) return;
+
+    if ((await getRequestUserId(req, res)) === null) return;
+
+    if (!(await requireDatabase(res))) return;
+
+    if (!(await assessmentExists(assessmentId))) {
+      res
+        .status(404)
+        .json(failure(ApiErrorCodes.NOT_FOUND, 'Assessment not found.', getRequestId(res)));
+      return;
+    }
+
+    const workspaceId = await getWorkspaceIdForAssessment(assessmentId);
+    if (!workspaceId) {
+      // Race: soft-deleted between the existence check above and here.
+      res
+        .status(404)
+        .json(failure(ApiErrorCodes.NOT_FOUND, 'Assessment not found.', getRequestId(res)));
+      return;
+    }
+
+    const actor = await requirePermission(req, res, workspaceId, 'assessment.read');
+    if (!actor) return;
+
+    const { items, total } = await listAssessmentActivity({
+      workspaceId,
+      assessmentId,
+      limit: query.limit,
+    });
+
+    res.status(200).json(success({ items, total, cursor: null }, getRequestId(res)));
+  })
+);

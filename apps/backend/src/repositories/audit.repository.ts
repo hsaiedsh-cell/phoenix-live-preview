@@ -311,3 +311,62 @@ export async function listWorkspaceAuditRecords(
   const items = result.rows.map(mapAuditRecordRow);
   return { items, total: items.length };
 }
+
+// ============================================================
+// PHX-BACKEND-009B — Assessment-Scoped Activity & Audit Read Endpoints
+// ------------------------------------------------------------
+// Read path for GET /api/assessments/:assessmentId/audit-records.
+// Mirrors listWorkspaceAuditRecords() above (same discipline, same
+// clamp/mapping helpers, same items.length `total` convention) but
+// scopes to one Assessment plus its child Evidence items — see
+// activity.repository.ts's listAssessmentActivity() file header for
+// the identical scope-match rationale (entity_type/entity_id match,
+// no evidence_items.deleted_at filter so deleted-Evidence audit
+// history remains visible, workspace_id enforced defense-in-depth).
+// audit_records has no deleted_at column at all (append-only by
+// design — see this file's top header), so there is no
+// row-level-soft-delete concern here the way there is for
+// activity_logs.
+// ============================================================
+
+export interface ListAssessmentAuditRecordsInput {
+  workspaceId: string;
+  assessmentId: string;
+  limit: number;
+}
+
+/**
+ * Lists audit_records rows scoped to one Assessment (the Assessment's
+ * own records plus its child Evidence items' records), most recent
+ * first. Deleted-Evidence audit history is retained (no
+ * evidence_items.deleted_at filter — see file header).
+ */
+export async function listAssessmentAuditRecords(
+  input: ListAssessmentAuditRecordsInput
+): Promise<{ items: AuditRecord[]; total: number }> {
+  const db = getDatabasePool();
+  const limit = clampAuditLimit(input.limit);
+
+  const result = await db.query<AuditRecordRow>(
+    `SELECT
+       id, workspace_id, actor_user_id, action, entity_type, entity_id,
+       changes, context, created_at
+     FROM audit_records
+     WHERE workspace_id = $1
+       AND (
+         (entity_type = 'Assessment' AND entity_id = $2)
+         OR (
+           entity_type = 'Evidence'
+           AND entity_id IN (
+             SELECT id FROM evidence_items WHERE assessment_id = $2
+           )
+         )
+       )
+     ORDER BY created_at DESC
+     LIMIT $3`,
+    [input.workspaceId, input.assessmentId, limit]
+  );
+
+  const items = result.rows.map(mapAuditRecordRow);
+  return { items, total: items.length };
+}

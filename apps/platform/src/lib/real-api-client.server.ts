@@ -135,6 +135,27 @@ export async function realGetWorkspaceAuditRecords(
   return serverFetch(`/api/workspaces/${encodeURIComponent(workspaceId)}/audit-records`);
 }
 
+// ---------------------------------------------------------------------------
+// PHX-BACKEND-009B — assessment-scoped Activity/Audit reads. Same
+// serverFetch<T>() pattern as every function in this file; only the
+// path differs (assessment-scoped, not workspace-scoped). No
+// entityType/entityId/workspaceId query param is ever sent — the
+// backend derives scope entirely from the path assessmentId, per task
+// brief §3.2.
+// ---------------------------------------------------------------------------
+
+export async function realGetAssessmentActivity(
+  assessmentId: string
+): Promise<BackendPaginatedResult<BackendActivityItem>> {
+  return serverFetch(`/api/assessments/${encodeURIComponent(assessmentId)}/activity`);
+}
+
+export async function realGetAssessmentAuditRecords(
+  assessmentId: string
+): Promise<BackendPaginatedResult<BackendAuditRecord>> {
+  return serverFetch(`/api/assessments/${encodeURIComponent(assessmentId)}/audit-records`);
+}
+
 /**
  * GET /api/assessments/:assessmentId. Returns `score: null` when the
  * assessment has not been scored yet (a 200, not a 404 — see

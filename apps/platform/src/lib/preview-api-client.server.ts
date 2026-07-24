@@ -433,6 +433,135 @@ export async function previewGetAssessmentScore(assessmentId: string): Promise<B
 }
 
 // ---------------------------------------------------------------------------
+// PHX-BACKEND-009B — assessment-scoped Activity/Audit reads
+// (vercel-supabase-preview mode). Mirrors
+// apps/backend/src/repositories/activity.repository.ts's
+// listAssessmentActivity() / audit.repository.ts's
+// listAssessmentAuditRecords() column-for-column — same scope-match
+// rule (Assessment's own rows, OR Evidence rows whose evidence_items.id
+// belongs to this assessment_id; no evidence_items.deleted_at filter,
+// so deleted-Evidence history remains visible), same workspace_id
+// resolved from the assessment row (never trusted from a caller),
+// same permission requirements (assessment.read for Activity,
+// audit.read for Audit) as the matching backend routes.
+// ---------------------------------------------------------------------------
+
+async function resolveAssessmentWorkspaceOrThrow(assessmentId: string): Promise<string> {
+  const pool = getPreviewDatabasePool();
+  const result = await pool.query<{ workspace_id: string }>(
+    `SELECT workspace_id FROM assessments WHERE id = $1 AND deleted_at IS NULL LIMIT 1`,
+    [assessmentId]
+  );
+  const workspaceId = result.rows[0]?.workspace_id;
+  if (!workspaceId) {
+    await resolvePreviewUserOrThrow();
+    throw new RealApiError(404, 'NOT_FOUND', 'Assessment not found.');
+  }
+  return workspaceId;
+}
+
+export async function previewGetAssessmentActivity(
+  assessmentId: string
+): Promise<BackendPaginatedResult<BackendActivityItem>> {
+  const workspaceId = await resolveAssessmentWorkspaceOrThrow(assessmentId);
+  await requirePreviewPermission(workspaceId, 'assessment.read');
+
+  const pool = getPreviewDatabasePool();
+  const result = await pool.query<{
+    id: string;
+    workspace_id: string;
+    type: string;
+    actor_user_id: string | null;
+    actor_display_name: string;
+    summary: string;
+    related_entity_type: string | null;
+    related_entity_id: string | null;
+    created_at: string;
+  }>(
+    `SELECT
+       id, workspace_id, type, actor_user_id, actor_display_name, summary,
+       related_entity_type, related_entity_id, created_at
+     FROM activity_logs
+     WHERE workspace_id = $1
+       AND deleted_at IS NULL
+       AND (
+         (related_entity_type = 'Assessment' AND related_entity_id = $2)
+         OR (
+           related_entity_type = 'Evidence'
+           AND related_entity_id IN (SELECT id FROM evidence_items WHERE assessment_id = $2)
+         )
+       )
+     ORDER BY created_at DESC
+     LIMIT 25`,
+    [workspaceId, assessmentId]
+  );
+
+  const items: BackendActivityItem[] = result.rows.map((row) => ({
+    id: row.id,
+    workspaceId: row.workspace_id,
+    type: row.type,
+    actorUserId: row.actor_user_id,
+    actorDisplayName: row.actor_display_name,
+    summary: row.summary,
+    relatedEntityType: row.related_entity_type,
+    relatedEntityId: row.related_entity_id,
+    createdAt: row.created_at,
+  }));
+
+  return { items, total: items.length, cursor: null };
+}
+
+export async function previewGetAssessmentAuditRecords(
+  assessmentId: string
+): Promise<BackendPaginatedResult<BackendAuditRecord>> {
+  const workspaceId = await resolveAssessmentWorkspaceOrThrow(assessmentId);
+  await requirePreviewPermission(workspaceId, 'audit.read');
+
+  const pool = getPreviewDatabasePool();
+  const result = await pool.query<{
+    id: string;
+    workspace_id: string;
+    actor_user_id: string | null;
+    action: string;
+    entity_type: string;
+    entity_id: string;
+    changes: Record<string, [unknown, unknown]>;
+    context: string | null;
+    created_at: string;
+  }>(
+    `SELECT
+       id, workspace_id, actor_user_id, action, entity_type, entity_id,
+       changes, context, created_at
+     FROM audit_records
+     WHERE workspace_id = $1
+       AND (
+         (entity_type = 'Assessment' AND entity_id = $2)
+         OR (
+           entity_type = 'Evidence'
+           AND entity_id IN (SELECT id FROM evidence_items WHERE assessment_id = $2)
+         )
+       )
+     ORDER BY created_at DESC
+     LIMIT 25`,
+    [workspaceId, assessmentId]
+  );
+
+  const items: BackendAuditRecord[] = result.rows.map((row) => ({
+    id: row.id,
+    workspaceId: row.workspace_id,
+    actorUserId: row.actor_user_id,
+    action: row.action,
+    entityType: row.entity_type,
+    entityId: row.entity_id,
+    changes: row.changes,
+    context: row.context,
+    createdAt: row.created_at,
+  }));
+
+  return { items, total: items.length, cursor: null };
+}
+
+// ---------------------------------------------------------------------------
 // Workspace activity — mirrors activity.repository.ts's listWorkspaceActivity().
 // Requires 'audit.read', exactly like GET /api/workspaces/:workspaceId/activity.
 // ---------------------------------------------------------------------------

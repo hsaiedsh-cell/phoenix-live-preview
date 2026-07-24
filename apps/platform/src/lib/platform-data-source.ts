@@ -68,6 +68,8 @@ import {
   realGetAssessmentDetail,
   realGetAssessmentEvidence,
   realGetAssessmentScore,
+  realGetAssessmentActivity,
+  realGetAssessmentAuditRecords,
   realGetWorkspaceActivity,
   realGetWorkspaceAuditRecords,
   realGetReports,
@@ -83,6 +85,8 @@ import {
   previewGetAssessmentDetail,
   previewGetAssessmentEvidence,
   previewGetAssessmentScore,
+  previewGetAssessmentActivity,
+  previewGetAssessmentAuditRecords,
   previewGetWorkspaceActivity,
   previewGetWorkspaceAuditRecords,
   previewGetPassports,
@@ -284,8 +288,22 @@ export async function loadAssessmentsListData(): Promise<LiveResult<LiveAssessme
 }
 
 // ---------------------------------------------------------------------------
-// Assessment detail (Task 6)
+// Assessment detail (Task 6; PHX-BACKEND-009B widens this with
+// assessment-scoped Activity/Audit)
 // ---------------------------------------------------------------------------
+
+/**
+ * PHX-BACKEND-009B: whether the current actor was granted audit.read
+ * for this assessment's workspace. 'restricted' means a 403 was
+ * received specifically for the audit-records call — every other
+ * section (Assessment/Score/Evidence/Activity) still loaded normally.
+ * This is NOT set for any other kind of audit failure (backend
+ * unavailable, unexpected error, etc.) — those propagate as a normal
+ * whole-section failure via errorToLiveResult(), exactly as they did
+ * before this sprint, rather than being silently mislabeled as a
+ * permission restriction.
+ */
+export type AssessmentAuditAccess = 'granted' | 'restricted';
 
 export interface LiveAssessmentDetailData {
   detail: BackendAssessmentDetail;
@@ -293,6 +311,12 @@ export interface LiveAssessmentDetailData {
   evidenceTotal: number;
   /** Redundant with detail.score, fetched separately per Task 6's explicit endpoint list; kept in sync — both come from the same backend record. */
   score: BackendScore | null;
+  /** PHX-BACKEND-009B: assessment-scoped activity (Assessment + child Evidence events). Requires only assessment.read — same permission the rest of this load already requires — so it is never isolated the way audit is. */
+  activity: BackendActivityItem[];
+  /** PHX-BACKEND-009B: assessment-scoped audit records. Empty when auditAccess is 'restricted'. */
+  auditRecords: BackendAuditRecord[];
+  /** PHX-BACKEND-009B: see AssessmentAuditAccess doc comment. */
+  auditAccess: AssessmentAuditAccess;
 }
 
 export async function loadAssessmentDetailData(
@@ -303,18 +327,50 @@ export async function loadAssessmentDetailData(
   if (config.mode === 'real-disabled') return notWiredResult(config.mode);
 
   try {
-    const [detail, evidenceResult, score] =
+    // Activity requires only assessment.read — the same permission this
+    // whole load already requires for detail/evidence/score to succeed
+    // — so it is bundled into the same Promise.all and fails together
+    // with the rest of the section exactly like before this sprint.
+    const [detail, evidenceResult, score, activityResult] =
       config.mode === 'vercel-supabase-preview'
         ? await Promise.all([
             previewGetAssessmentDetail(assessmentId),
             previewGetAssessmentEvidence(assessmentId),
             previewGetAssessmentScore(assessmentId),
+            previewGetAssessmentActivity(assessmentId),
           ])
         : await Promise.all([
             realGetAssessmentDetail(assessmentId),
             realGetAssessmentEvidence(assessmentId),
             realGetAssessmentScore(assessmentId),
+            realGetAssessmentActivity(assessmentId),
           ]);
+
+    // Audit requires audit.read, which most roles that can view an
+    // assessment do NOT have (see the approved Audit role matrix —
+    // Owner/Admin/Auditor only). A 403 here is isolated: it must not
+    // prevent the rest of this function's data from loading. Any OTHER
+    // error (not a 403/PERMISSION_DENIED) is re-thrown into this
+    // function's own outer catch below, so it surfaces as the normal
+    // errorToLiveResult() status (e.g. 'backend-unavailable') the same
+    // way it would have before this sprint — never silently converted
+    // into 'restricted'.
+    let auditRecords: BackendAuditRecord[] = [];
+    let auditAccess: AssessmentAuditAccess = 'granted';
+    try {
+      const auditResult =
+        config.mode === 'vercel-supabase-preview'
+          ? await previewGetAssessmentAuditRecords(assessmentId)
+          : await realGetAssessmentAuditRecords(assessmentId);
+      auditRecords = auditResult.items;
+    } catch (auditErr) {
+      if (auditErr instanceof RealApiError && auditErr.code === 'PERMISSION_DENIED') {
+        auditAccess = 'restricted';
+      } else {
+        throw auditErr;
+      }
+    }
+
     return {
       status: 'live',
       mode: config.mode,
@@ -323,6 +379,9 @@ export async function loadAssessmentDetailData(
         evidence: evidenceResult.items,
         evidenceTotal: evidenceResult.total,
         score,
+        activity: activityResult.items,
+        auditRecords,
+        auditAccess,
       },
     };
   } catch (err) {

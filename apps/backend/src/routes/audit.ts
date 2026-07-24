@@ -40,8 +40,14 @@ import { asyncHandler, getRequestId } from '../lib/http';
 import { ApiErrorCodes, failure, success } from '../contracts/api-response';
 import { requireDatabase } from '../middleware/database-required';
 import { workspaceExists } from '../repositories/workspaces.repository';
-import { listWorkspaceAuditRecords } from '../repositories/audit.repository';
-import { parseAuditListQuery, parseWorkspaceId } from '../validation/route-params';
+import { listWorkspaceAuditRecords, listAssessmentAuditRecords } from '../repositories/audit.repository';
+import { assessmentExists, getWorkspaceIdForAssessment } from '../repositories/assessments.repository';
+import {
+  parseAssessmentId,
+  parseAssessmentScopedListQuery,
+  parseAuditListQuery,
+  parseWorkspaceId,
+} from '../validation/route-params';
 import { getRequestUserId, requirePermission } from '../auth/request-actor';
 
 export const auditRouter = Router();
@@ -84,9 +90,68 @@ auditRouter.get(
   })
 );
 
-// ---- Task 7: assessment-scoped audit endpoint — deferred --------------
-// GET /api/assessments/:assessmentId/audit-records is NOT implemented
-// this sprint — same rationale as routes/activity.ts's deferred
-// assessment-scoped endpoint. See
-// docs/backend/PHX_BACKEND_008_IMPLEMENTATION_REPORT.md
-// §"Optional assessment-scoped endpoints — deferred".
+// ============================================================
+// PHX-BACKEND-009B — Assessment-Scoped Activity & Audit Read Endpoints
+// ------------------------------------------------------------
+// GET /api/assessments/:assessmentId/audit-records — the
+// assessment-scoped counterpart to the workspace-level route above,
+// deferred by PHX-BACKEND-008 (see the removed comment this replaces).
+// Returns audit history for the target Assessment plus its child
+// Evidence items (see repositories/audit.repository.ts's
+// listAssessmentAuditRecords() for the exact scope-match rule).
+//
+// ---- Permission decision -----------------------------------------------
+// Uses `audit.read` — Owner/Admin/Auditor only, identical to the
+// workspace-level Audit route above and to the approved Audit role
+// matrix (Reviewer/Contributor/Viewer denied with the existing
+// 403 FORBIDDEN standard — no new error code is introduced).
+//
+// ---- Query scope / request-processing order — identical to
+//      routes/activity.ts's new assessment-scoped route above (see
+//      that file's matching comment for the full step-by-step
+//      rationale); only the permission (audit.read vs. assessment.read)
+//      and the repository call differ.
+// ============================================================
+
+// GET /api/assessments/:assessmentId/audit-records
+auditRouter.get(
+  '/assessments/:assessmentId/audit-records',
+  asyncHandler(async (req, res) => {
+    const assessmentId = parseAssessmentId(req, res);
+    if (assessmentId === null) return;
+
+    const query = parseAssessmentScopedListQuery(req, res);
+    if (query === null) return;
+
+    if ((await getRequestUserId(req, res)) === null) return;
+
+    if (!(await requireDatabase(res))) return;
+
+    if (!(await assessmentExists(assessmentId))) {
+      res
+        .status(404)
+        .json(failure(ApiErrorCodes.NOT_FOUND, 'Assessment not found.', getRequestId(res)));
+      return;
+    }
+
+    const workspaceId = await getWorkspaceIdForAssessment(assessmentId);
+    if (!workspaceId) {
+      // Race: soft-deleted between the existence check above and here.
+      res
+        .status(404)
+        .json(failure(ApiErrorCodes.NOT_FOUND, 'Assessment not found.', getRequestId(res)));
+      return;
+    }
+
+    const actor = await requirePermission(req, res, workspaceId, 'audit.read');
+    if (!actor) return;
+
+    const { items, total } = await listAssessmentAuditRecords({
+      workspaceId,
+      assessmentId,
+      limit: query.limit,
+    });
+
+    res.status(200).json(success({ items, total, cursor: null }, getRequestId(res)));
+  })
+);

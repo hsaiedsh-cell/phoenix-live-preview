@@ -18,3 +18,8 @@ coverage/
 __MACOSX/
 
 *.log
+*.tsbuildinfo
+
+# PHX-REPORTS-004 — local report artifact storage (generated files,
+# never committed).
+apps/backend/storage/

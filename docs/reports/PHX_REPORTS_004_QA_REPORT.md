@@ -17,6 +17,11 @@ A prior summary in this session miscounted totals. Reconciled precisely:
   (`qa-full.ts`, `qa-lifecycle.ts`, `qa-edge-cases.ts`, `test-invariants.ts`,
   `portfolio-test.ts`), run across **12 total script executions** (including
   crashed/failed preliminary attempts and confirmatory reruns).
+
+  **Note:** this was the accounting at this specific point in the sprint —
+  before `qa-storage-security.ts` (19 checks) was added, and before the final
+  post-review fix round added 3 more suites. See §15 below for the final,
+  authoritative sprint-wide total (125 unique assertions).
 - No suite's checks overlap another's in content.
 - Every failure/crash before each suite's final clean run was traced to a
   specific, documented root cause — a test-script bug, a QA-environment defect
@@ -324,9 +329,22 @@ the full per-issue root cause and fix description. Summary:
 
 All previously-passing suites (`qa-full`, `qa-lifecycle`, `qa-edge-cases`,
 `qa-storage-security`, `test-invariants`) were re-run against the fixed code
-and remain clean: 28/28, 20/20, 18/18, 19/19, 5/5 respectively. Combined with
-the 3 new suites (6+11+17 = 34), the total real, currently-passing check count
-across this sprint's QA is **124**.
+and remain clean: 28/28, 20/20, 18/18, 19/19, 5/5 respectively (90 total).
+Combined with the 3 new suites (6+11+17 = 34), the **final post-fix regression
+execution total is 90 + 34 = 124/124**.
+
+This 124 figure is the count of checks actually re-executed in this fix round
+— it does not include §8's bounded portfolio-size assertion (1/1), which
+targets code (`report-render-data.repository.ts`'s
+`REPORT_PORTFOLIO_MAX_ASSETS` bound and the generation service's requeue/
+terminal-fail path) that none of the 4 fixes touched, and so was not
+re-executed here. That assertion is not a duplicate of anything in the 8
+suites above and remains a separate, unique, currently-valid check —
+**not** removed or absorbed into the 124.
+
+**Total unique, currently-valid assertions across the entire PHX-REPORTS-004
+sprint: 124 (final post-fix regression execution) + 1 (bounded portfolio-size
+assertion, §8) = 125.**
 
 The root static gate (`pnpm install --frozen-lockfile && pnpm type-check &&
 pnpm lint && pnpm build`) was re-run clean after these fixes, both against the

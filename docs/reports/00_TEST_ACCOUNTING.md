@@ -72,13 +72,43 @@ Four real, distinct defects were found by review and fixed on `phx-reports-004`:
 | `qa-route-registration.ts` (NEW) | `npx tsx qa-route-registration.ts` | 6/6 |
 | `qa-boot-config.ts` (NEW, real process spawns) | `npx tsx qa-boot-config.ts` | 11/11 |
 | `qa-report-polling-controller.ts` (NEW, fake-timer) | `npx tsx qa-report-polling-controller.ts` | 17/17 |
-| **Total (post-fix)** | | **124/124** |
+| **Total (post-fix regression execution)** | | **124/124** |
 
-Combined with the pre-fix suites' final clean totals (85/85, from the original
-handoff — those suites were unaffected by these 4 fixes' code paths and were
-re-run again here as part of the same 124 total, not double-counted), the grand
-total of unique, currently-passing real checks across this entire sprint's QA
-is **124** (the pre-fix 85 are a subset of qa-full/qa-lifecycle/qa-edge-cases/
-qa-storage-security/test-invariants, all re-run and included in the 124 above;
-the 3 new suites — route registration, boot config, polling controller — add
-34 checks that did not exist before this review round).
+The 124 figure above is the **final post-fix regression execution total** —
+every suite in this table, actually re-run against the final fixed code, in
+this fix round. It is not, by itself, the grand total of every unique,
+currently-valid assertion produced across the entire sprint — see the
+correction below.
+
+### Accounting correction — the bounded portfolio-size assertion is a separate, additional unique check
+
+The original QA report's §8 (bounded portfolio-size QA) documents one
+additional real, currently-valid assertion — the workspace-portfolio-summary
+template's `REPORT_PORTFOLIO_MAX_ASSETS` bound correctly retries within budget
+and then terminally fails with the exact documented sanitized reason,
+confirmed via direct SQL inspection after driving a real job through its full
+attempt budget across 2 real worker runs. This check:
+- Targets `report-render-data.repository.ts`'s bounded-portfolio-size logic
+  and the generation service's requeue/terminal-fail path — code untouched by
+  all 4 of this review round's fixes (duplicate route removal, boot-config
+  wiring, polling-controller extraction, archive packaging).
+- Was NOT re-executed as part of this fix round's regression set (the 124
+  above), since none of the 4 fixes touch its code path.
+- Is NOT a duplicate of, or subsumed by, any of the 8 suites in the table
+  above — no other suite exercises `REPORT_PORTFOLIO_MAX_ASSETS` exhaustion.
+- Therefore remains counted as its own separate, unique, currently-valid
+  assertion — **not** removed or silently absorbed into the 124.
+
+**Total unique, currently-valid assertions across the entire PHX-REPORTS-004
+sprint: 124 (final post-fix regression execution) + 1 (bounded portfolio-size
+assertion, unaffected by and not re-executed in the fix round) = 125.**
+
+Combined with the pre-fix suites' final clean totals (90/90 — `qa-full` 28,
+`qa-lifecycle` 20, `qa-edge-cases` 18, `qa-storage-security` 19,
+`test-invariants` 5 — from the original handoff; those suites were unaffected
+by the 4 fixes' code paths and were re-run again here as part of the same 124
+post-fix regression total, not double-counted), plus the 3 new suites (route
+registration 6, boot config 11, polling controller 17 = 34), the post-fix
+regression total is 90 + 34 = **124**. Adding the separately-tracked, still-valid
+portfolio-size assertion (1) gives the sprint-wide unique-assertion total of
+**125**.

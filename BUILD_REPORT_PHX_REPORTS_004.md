@@ -84,7 +84,15 @@ See `docs/reports/PHX_REPORTS_004_QA_REPORT.md` §15 and
 pre-existing live-backend regression suites re-run clean after the fixes
 (28+20+18+19+5 = 90), plus 3 new suites added specifically to cover the fixed
 defects (route registration 6, real process-level boot config 11,
-deterministic polling controller 17 = 34). **Combined total: 124/124.**
+deterministic polling controller 17 = 34). **Final post-fix regression
+execution total: 90 + 34 = 124/124.**
+
+This 124 is the re-executed regression count, not the sprint-wide grand total:
+the bounded portfolio-size assertion (QA report §8, 1/1) targets code untouched
+by these 4 fixes and was not re-executed in this round, but remains a separate,
+unique, currently-valid check — it is not a duplicate of anything in the 124
+and is not absorbed into it. **Total unique, currently-valid assertions across
+the entire PHX-REPORTS-004 sprint: 124 + 1 = 125.**
 
 The corrected source archive was extracted into a completely separate
 directory and the full static gate (`install --frozen-lockfile`, `type-check`,

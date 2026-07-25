@@ -139,7 +139,7 @@ export async function submitIntakeRequest(
         case 'replay': {
           const requestRow = await intakeRequestsRepo.findById(decision.requestId);
           if (requestRow) {
-            await eventsRepo.recordEvent(requestRow.id, 'request.idempotency_replay');
+            await recordPostCommitEvent(requestRow.id, 'request.idempotency_replay', { route: 'submitIntakeRequest' });
             return { kind: 'accepted', publicReference: requestRow.public_reference, wasReplay: true };
           }
           continue; // fall through to retry, same reasoning as the !existing branch

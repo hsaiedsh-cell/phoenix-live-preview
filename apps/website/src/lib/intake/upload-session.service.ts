@@ -92,7 +92,7 @@ export async function revokeUploadSession(requestId: string): Promise<{ revoked:
   if (!active) return { revoked: false };
   const revoked = await uploadSessionsRepo.revokeSession(active.id);
   if (revoked) {
-    await eventsRepo.recordEvent(requestId, 'request.upload_session_revoked');
+    await recordPostCommitEvent(requestId, 'request.upload_session_revoked', { route: 'revokeUploadSession' });
   }
   return { revoked: Boolean(revoked) };
 }

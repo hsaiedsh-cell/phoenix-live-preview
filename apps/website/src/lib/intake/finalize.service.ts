@@ -14,7 +14,7 @@
 // ============================================================
 
 import * as intakeRequestsRepo from './repositories/intake-requests.repository';
-import * as eventsRepo from './repositories/intake-events.repository';
+import { recordPostCommitEvent } from './post-commit';
 
 export type FinalizeAction = 'under_review' | 'reject' | 'quote' | 'accept' | 'close';
 
@@ -26,7 +26,7 @@ const ACTION_TO_STATUS: Record<FinalizeAction, intakeRequestsRepo.IntakeRequestS
   close: 'closed',
 };
 
-const ACTION_TO_EVENT: Partial<Record<FinalizeAction, eventsRepo.IntakeEventType>> = {
+const ACTION_TO_EVENT: Partial<Record<FinalizeAction, 'request.rejected' | 'request.closed'>> = {
   reject: 'request.rejected',
   close: 'request.closed',
 };
@@ -50,11 +50,16 @@ export async function finalizeIntakeRequest(requestId: string, action: FinalizeA
     // Lost a race against a concurrent transition of the same row.
     return { kind: 'invalid_transition', from: existing.status, to: toStatus };
   }
-  await eventsRepo.recordEvent(requestId, 'request.status_changed', { from: existing.status, to: toStatus });
+  // R4 (§4): this action is NOT transactional with the UPDATE above
+  // (updateStatus already committed via the plain global pool) -- the
+  // event describing it is therefore best-effort, never throwable, so
+  // a transient failure recording it can never turn an
+  // already-committed status change into a reported error.
+  await recordPostCommitEvent(requestId, 'request.status_changed', { route: 'finalizeIntakeRequest' }, { from: existing.status, to: toStatus });
 
   const specificEvent = ACTION_TO_EVENT[action];
   if (specificEvent) {
-    await eventsRepo.recordEvent(requestId, specificEvent);
+    await recordPostCommitEvent(requestId, specificEvent, { route: 'finalizeIntakeRequest' });
   }
 
   return { kind: 'ok', status: updated.status };

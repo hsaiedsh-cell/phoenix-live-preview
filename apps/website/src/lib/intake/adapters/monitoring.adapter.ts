@@ -119,6 +119,35 @@ export function stripUrlQueryAndFragment(value: string): string {
   }
 }
 
+/**
+ * R4 (§6): the general-purpose version of the above, applied to
+ * EVERY string value encountered anywhere during recursive
+ * scrubbing (breadcrumb data, span data, tags, nested context
+ * values) -- not merely the single, special-cased `event.request.url`
+ * field R2/R3 handled. A nested field such as
+ * `{ nested: { url: "https://example.test/path?email=customer@example.com" } }`
+ * previously survived R3's sanitizer entirely, since only
+ * `request.url` itself was ever passed through query/fragment
+ * stripping; every other string only got token-path redaction.
+ * Absolute URLs are parsed and stripped precisely; a bare
+ * absolute-path string (starting with `/`) with a trailing `?`/`#`
+ * is also stripped from that point, so genuinely non-URL free text
+ * (which matches neither shape) is left untouched.
+ */
+function stripQueryAndFragmentFromAnyUrlLikeString(value: string): string {
+  try {
+    const url = new URL(value);
+    url.search = '';
+    url.hash = '';
+    return url.toString();
+  } catch {
+    if (/^\/[^\s?#]*[?#]/.test(value)) {
+      return value.split(/[?#]/)[0];
+    }
+    return value;
+  }
+}
+
 // R2 (§6): only these `event.contexts` keys are ever kept -- Sentry's
 // Next.js integration can auto-populate this object with device/
 // browser/culture/etc. context that has no place in a server-only
@@ -132,25 +161,53 @@ const ALLOWED_CONTEXTS_KEYS = new Set(['runtime']);
 // keys must never survive into a sanitized event, and this list is
 // intentionally broad (covering common casing/naming variants) rather
 // than assuming call sites will always use one exact key name.
-const DANGEROUS_DATA_KEYS = new Set([
-  'body',
-  'email',
-  'message',
-  'filename',
-  'fileName',
-  'file_name',
-  'originalFilename',
-  'original_filename',
-  'objectKey',
-  'object_key',
-  'storageObjectKey',
-  'storage_object_key',
-  'token',
-  'uploadToken',
-  'upload_token',
-  'authorization',
-  'cookie',
-]);
+// R4 (§6): keys are compared case-INSENSITIVELY and separator-
+// insensitively -- "Authorization", "AUTHORIZATION", "auth_orization"
+// style variants, and "query_string"/"queryString"/"QUERY_STRING" all
+// normalize to the same comparison key, since R3's exact-string Set
+// missed "Authorization" (capitalized, as HTTP header names commonly
+// appear) and "QUERY_STRING" (upper-snake-case, as some
+// integrations name it) entirely.
+function normalizeKey(key: string): string {
+  return key.toLowerCase().replace(/[-_\s]/g, '');
+}
+
+const DANGEROUS_DATA_KEYS = new Set(
+  [
+    'body',
+    'email',
+    'message',
+    'filename',
+    'fileName',
+    'file_name',
+    'originalFilename',
+    'original_filename',
+    'objectKey',
+    'object_key',
+    'storageObjectKey',
+    'storage_object_key',
+    'token',
+    'uploadToken',
+    'upload_token',
+    'authorization',
+    'cookie',
+    // R4 (§6): header bags are sensitive BY DEFAULT (may contain
+    // Authorization/Cookie/etc. under any casing) -- remove the
+    // whole bag rather than trying to allowlist safe headers.
+    'headers',
+    'header',
+    // R4 (§6): every common spelling of "the query string" --
+    // whichever one a given integration happens to use.
+    'query',
+    'queryString',
+    'query_string',
+    'search',
+    'searchParams',
+    'search_params',
+    'cookies',
+    'auth',
+  ].map(normalizeKey)
+);
 
 // R3 (§5): a nested object under an otherwise-harmless key (e.g.
 // { context: { user: { email: '...' } } }) previously survived R2's
@@ -163,7 +220,7 @@ const MAX_SCRUB_COLLECTION_SIZE = 50;
 
 function scrubValue(value: unknown, depth: number): unknown {
   if (depth > MAX_SCRUB_DEPTH) return '[redacted-max-depth]';
-  if (typeof value === 'string') return redactUploadTokenFromUrl(value);
+  if (typeof value === 'string') return redactUploadTokenFromUrl(stripQueryAndFragmentFromAnyUrlLikeString(value));
   if (Array.isArray(value)) {
     return value.slice(0, MAX_SCRUB_COLLECTION_SIZE).map((entry) => scrubValue(entry, depth + 1));
   }
@@ -174,20 +231,24 @@ function scrubValue(value: unknown, depth: number): unknown {
 }
 
 /**
- * R3 (§5): recursively removes every DANGEROUS_DATA_KEYS key at
- * EVERY nesting level (not just the top level), redacts token/
- * object-key-shaped substrings in every string value at every level,
- * and bounds both recursion depth and collection/object size. Used
- * for breadcrumb data, span data, the allowed context's own value,
- * and tags -- anywhere Sentry's auto-instrumentation could have
- * attached arbitrarily-shaped, arbitrarily-deep data.
+ * R3 (§5) + R4 (§6): recursively removes every DANGEROUS_DATA_KEYS
+ * key at EVERY nesting level (not just the top level), comparing key
+ * names case- and separator-INSENSITIVELY (so "Authorization",
+ * "AUTHORIZATION", and "QUERY_STRING" are all caught, not only their
+ * exact-cased forms), redacts token/object-key-shaped substrings and
+ * strips query strings/fragments from every URL-shaped string value
+ * at every level, and bounds both recursion depth and collection/
+ * object size. Used for breadcrumb data, span data, the allowed
+ * context's own value, and tags -- anywhere Sentry's
+ * auto-instrumentation could have attached arbitrarily-shaped,
+ * arbitrarily-deep data.
  */
 function scrubDataObject(data: Record<string, unknown>, depth = 0): Record<string, unknown> {
   if (depth > MAX_SCRUB_DEPTH) return {};
   const next: Record<string, unknown> = {};
   const keys = Object.keys(data).slice(0, MAX_SCRUB_COLLECTION_SIZE);
   for (const key of keys) {
-    if (DANGEROUS_DATA_KEYS.has(key)) continue;
+    if (DANGEROUS_DATA_KEYS.has(normalizeKey(key))) continue;
     next[key] = scrubValue(data[key], depth + 1);
   }
   return next;

@@ -20,6 +20,7 @@ import * as eventsRepo from './repositories/intake-events.repository';
 import * as uploadSessionsRepo from './repositories/upload-sessions.repository';
 import { generateRawUploadToken, tokenHash } from './hash';
 import { sendEmailSafely } from './adapters';
+import { recordPostCommitEvent } from './post-commit';
 import { buildUploadInvitationEmail } from './adapters/email.adapter';
 import { publicConfig } from './config';
 import { withIntakeTransaction } from './db';
@@ -77,9 +78,10 @@ export async function issueUploadSession(requestId: string): Promise<IssueUpload
   email.to = workEmail;
   email.idempotencyKey = `upload-invitation/${session.id}`;
   const sendResult = await sendEmailSafely(email);
-  await eventsRepo.recordEvent(
+  await recordPostCommitEvent(
     requestId,
-    sendResult.success ? 'request.upload_invite_email_sent' : 'request.upload_invite_email_failed'
+    sendResult.success ? 'request.upload_invite_email_sent' : 'request.upload_invite_email_failed',
+    { route: 'issueUploadSession' }
   );
 
   return { kind: 'ok', expiresAt: session.expires_at, emailSent: sendResult.success };

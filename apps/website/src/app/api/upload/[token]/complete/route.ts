@@ -7,7 +7,7 @@
 // and contentType are NEVER accepted from the client here; they are
 // already bound to the server-side reservation created during
 // signing and are revalidated against the storage provider's own
-// observed metadata inside completeUploadObject.
+// provider-recorded size and Content-Type metadata inside completeUploadObject.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -57,7 +57,7 @@ export async function POST(
         return genericErrorResponse(422, 'We could not verify that file. Please try again.', requestId);
       case 'ok':
         logIntakeEvent({ requestId, route, outcome: 'ok', statusCode: 200 });
-        return NextResponse.json({ fileCount: outcome.fileCount, requestId }, { status: 200 });
+        return NextResponse.json({ fileCount: outcome.fileCount, finalized: outcome.finalized, requestId }, { status: 200 });
     }
   } catch (error) {
     reportInternalError(error, { requestId, route, errorCategory: 'upload_completion' });

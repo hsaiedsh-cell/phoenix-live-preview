@@ -36,6 +36,44 @@ export async function findActiveSessionForRequest(requestId: string): Promise<Up
   return rows[0] ?? null;
 }
 
+/**
+ * R2 (§2.2 step 1): locks the session row for the duration of the
+ * enclosing transaction. Used by completeUploadObject's atomic
+ * revalidate-then-complete-then-finalize transaction, always BEFORE
+ * locking the reservation row (see lockReservationForUpdate in
+ * intake-files.repository.ts) -- a single, consistent lock order
+ * across every call site, which is what prevents a classic
+ * lock-ordering deadlock between concurrent completions.
+ */
+export async function lockSessionForUpdate(query: TransactionQuery, sessionId: string): Promise<UploadSessionRow | null> {
+  const rows = await query<UploadSessionRow>(
+    `SELECT * FROM public_upload_sessions WHERE id = $1 FOR UPDATE`,
+    [sessionId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * R2 (§2.2 step 7): the exactly-once finalization transition, now
+ * called from INSIDE the same transaction as completion and the
+ * request-status transition (unlike R1's finalizeSessionOnce, which
+ * was its own separate statement/transaction, allowing a revoked or
+ * expired session to be overwritten to 'used' if a completion raced
+ * a revoke). The caller is responsible for having already
+ * revalidated session.status/expires_at/revoked_at in this same
+ * transaction via lockSessionForUpdate before calling this.
+ */
+export async function finalizeSessionInTransaction(query: TransactionQuery, sessionId: string): Promise<UploadSessionRow | null> {
+  const rows = await query<UploadSessionRow>(
+    `UPDATE public_upload_sessions
+       SET status = 'used', used_at = COALESCE(used_at, now()), finalized_at = now()
+       WHERE id = $1 AND finalized_at IS NULL
+       RETURNING *`,
+    [sessionId]
+  );
+  return rows[0] ?? null;
+}
+
 /** R1 (§4.3): transaction-scoped read, used inside the same transaction that will also create the session, to avoid a TOCTOU gap. */
 export async function findActiveSessionForRequestInTransaction(
   query: TransactionQuery,
@@ -132,25 +170,15 @@ export async function markSessionUsed(id: string): Promise<void> {
 }
 
 /**
- * R1 (§1.5): the ONE atomic operation that decides whether THIS
- * caller is the winner of "first successful session finalization".
- * `finalized_at IS NULL` in the WHERE clause means only one
- * concurrent/duplicate call can ever see a non-empty result — every
- * other caller (including legitimate retries) gets an empty array
- * and must treat that as "already finalized, do nothing more"
- * rather than repeating the request.files_received transition or
- * resending the upload-complete notification.
+ * R2: superseded by finalizeSessionInTransaction above, which is
+ * always called from inside the same transaction that has already
+ * revalidated the session and completed a reservation. This
+ * non-transactional version was R1's finalization primitive and is
+ * removed -- calling it standalone, outside a lock/revalidation
+ * transaction, is exactly the race PHX-LAUNCH-001-R2 §2.1 describes
+ * (a concurrently revoked/expired session could be overwritten to
+ * 'used').
  */
-export async function finalizeSessionOnce(id: string): Promise<UploadSessionRow | null> {
-  const rows = await intakeQuery<UploadSessionRow>(
-    `UPDATE public_upload_sessions
-       SET status = 'used', used_at = COALESCE(used_at, now()), finalized_at = now()
-       WHERE id = $1 AND finalized_at IS NULL
-       RETURNING *`,
-    [id]
-  );
-  return rows[0] ?? null;
-}
 
 export async function revokeSession(id: string): Promise<UploadSessionRow | null> {
   const rows = await intakeQuery<UploadSessionRow>(

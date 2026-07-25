@@ -135,6 +135,52 @@ export async function findReservationByObjectKey(storageObjectKey: string): Prom
 }
 
 /**
+ * R2 (§2.2 step 2): locks the reservation row for the duration of the
+ * enclosing transaction. Always called AFTER lockSessionForUpdate in
+ * upload-sessions.repository.ts within the same transaction -- a
+ * single, consistent lock order (session, then reservation) across
+ * every call site prevents a lock-ordering deadlock between
+ * concurrent completions.
+ */
+export async function lockReservationForUpdate(query: TransactionQuery, storageObjectKey: string): Promise<IntakeFileRow | null> {
+  const rows = await query<IntakeFileRow>(
+    `SELECT * FROM public_intake_files WHERE storage_object_key = $1 FOR UPDATE`,
+    [storageObjectKey]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * R2: transaction-scoped variant of completeReservationOnce, called
+ * only after the enclosing transaction has already revalidated both
+ * the locked session and this locked reservation row.
+ */
+export async function completeReservationInTransaction(
+  query: TransactionQuery,
+  reservationId: string,
+  verifiedContentType: string,
+  verifiedSizeBytes: number
+): Promise<IntakeFileRow | null> {
+  const rows = await query<IntakeFileRow>(
+    `UPDATE public_intake_files
+       SET reservation_status = 'completed', verified_content_type = $2, verified_size_bytes = $3, completed_at = now()
+       WHERE id = $1 AND reservation_status = 'reserved'
+       RETURNING *`,
+    [reservationId, verifiedContentType, verifiedSizeBytes]
+  );
+  return rows[0] ?? null;
+}
+
+/** R2: transaction-scoped completed-file count, used inside the same transaction as the completion above so it reflects that just-completed row. */
+export async function countCompletedForSessionInTransaction(query: TransactionQuery, uploadSessionId: string): Promise<number> {
+  const rows = await query<{ cnt: string }>(
+    `SELECT count(*) AS cnt FROM public_intake_files WHERE upload_session_id = $1 AND reservation_status = 'completed'`,
+    [uploadSessionId]
+  );
+  return Number(rows[0]?.cnt ?? 0);
+}
+
+/**
  * Atomically transitions exactly one 'reserved' row to 'completed'.
  * The `WHERE reservation_status = 'reserved'` clause is what makes
  * "already-completed object cannot complete twice" true at the
@@ -195,15 +241,26 @@ export async function findOrphanReservations(): Promise<OrphanReservationRow[]> 
   );
 }
 
-/** Marks still-'reserved' rows whose session has expired as 'expired' (does not touch already-'failed' rows or any 'completed' row). */
-export async function expireOrphanReservations(): Promise<IntakeFileRow[]> {
-  return intakeQuery<IntakeFileRow>(
-    `UPDATE public_intake_files f
+/**
+ * R2 (§4.2): marks exactly ONE reservation row 'expired'. Unlike R1's
+ * bulk expireOrphanReservations, this is called by the ops CLI only
+ * AFTER the storage adapter has successfully deleted (or confirmed
+ * absent -- see StorageAdapter.deleteObject's "not found is an
+ * idempotent success" contract) the underlying provider object for
+ * THIS row -- R1's bulk update changed database status without ever
+ * removing the object from the private bucket, leaving orphaned
+ * customer files in Storage indefinitely, which is exactly the gap
+ * R2 closes. Never touches a 'completed' row (the WHERE clause only
+ * matches 'reserved' or already-'failed' rows, matching
+ * findOrphanReservations' own definition of an orphan).
+ */
+export async function markReservationExpired(reservationId: string): Promise<IntakeFileRow | null> {
+  const rows = await intakeQuery<IntakeFileRow>(
+    `UPDATE public_intake_files
        SET reservation_status = 'expired'
-       FROM public_upload_sessions s
-       WHERE f.upload_session_id = s.id
-         AND f.reservation_status = 'reserved'
-         AND s.expires_at < now()
-       RETURNING f.*`
+       WHERE id = $1 AND reservation_status IN ('reserved', 'failed')
+       RETURNING *`,
+    [reservationId]
   );
+  return rows[0] ?? null;
 }

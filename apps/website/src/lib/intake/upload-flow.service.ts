@@ -1,28 +1,26 @@
 // ============================================================
 // Upload flow service -- token validation, reservation-based
-// signing, and revalidated completion
-// PHX-LAUNCH-001-R1 §1
+// signing, and atomically-revalidated completion
+// PHX-LAUNCH-001 (R2: PHX-LAUNCH-001-R2 §2)
 // ------------------------------------------------------------
 // Backs GET /api/upload/:token, POST /api/upload/:token/sign, and
 // POST /api/upload/:token/complete. Public but invitation-only:
 // anonymous callers without a valid token are always denied.
 //
-// R1 correction summary:
-//  - signUploadObject now locks the parent session row
-//    (`SELECT ... FOR UPDATE`) and evaluates count/size limits
-//    against ALL non-failed, non-expired reservations inside that
-//    same transaction before inserting a new 'reserved' row, making
-//    the 5-file/60MB limits concurrency-safe (§1.2).
-//  - completeUploadObject never trusts client-supplied
-//    filename/contentType; it looks up the server-side reservation
-//    created at signing time, verifies it belongs to the same
-//    session/request, verifies the PROVIDER's own observed size and
-//    MIME metadata match what was declared, and validates the file
-//    extension independently of the claimed MIME type (§1.3/§1.4).
-//  - Session finalization is exactly-once via
-//    upload-sessions.repository.ts's finalizeSessionOnce; only the
-//    winner of that race transitions the request to files_received
-//    and requests the upload-complete notification (§1.5).
+// R2 correction summary (§2): the R1 completion flow validated the
+// session, THEN called the storage provider, THEN completed/finalized
+// without re-checking whether the session had been revoked or had
+// expired in the meantime -- finalizeSessionOnce only checked
+// finalized_at IS NULL, so a concurrently revoked/expired session
+// could still be overwritten to 'used'. R2 fetches provider metadata
+// FIRST (external call, no DB connection held), then opens ONE short
+// transaction that locks the session row and the reservation row
+// (in that consistent order, session-then-reservation, everywhere --
+// see the repository functions' own comments on why), fully
+// revalidates both, completes the reservation, and -- only if
+// finalization is warranted -- finalizes the session and transitions
+// the request, all before COMMIT. The upload-complete email is
+// requested only after that commit.
 // ============================================================
 
 import { tokenHash } from './hash';
@@ -34,7 +32,7 @@ import { generateStorageObjectKey } from './object-key';
 import { getStorageAdapter, sendEmailSafely } from './adapters';
 import { buildUploadCompleteInternalEmail } from './adapters/email.adapter';
 import { serverConfig } from './config';
-import { withIntakeTransaction } from './db';
+import { withIntakeTransaction, type TransactionQuery } from './db';
 import { UPLOAD_LIMITS } from './config';
 import { isDangerousExtension, isExtensionCompatibleWithMimeType } from './extension-validation';
 
@@ -92,7 +90,6 @@ export async function signUploadObject(
     return { kind: 'denied', reason: validity.reason };
   }
 
-  // ---- R1 §1.4: extension validation, independent of client-declared MIME ----
   if (isDangerousExtension(candidate.filename)) {
     await eventsRepo.recordEvent(validity.session.request_id, 'upload.file_rejected_extension');
     return { kind: 'rejected', reason: 'extension_not_allowed' };
@@ -110,7 +107,6 @@ export async function signUploadObject(
     return { kind: 'rejected', reason: 'per_file_size_exceeded' };
   }
 
-  // ---- R1 §1.2: concurrency-safe quota check under a row lock, inside one transaction ----
   const reservationResult = await withIntakeTransaction(async (query) => {
     const lockedSession = await intakeFilesRepo.lockUploadSessionForUpdate(query, validity.session.id);
     if (!lockedSession || lockedSession.status !== 'active') {
@@ -139,21 +135,13 @@ export async function signUploadObject(
     return { kind: 'denied', reason: reservationResult.reason };
   }
   if (reservationResult.kind === 'rejected') {
-    const eventByReason = {
-      file_count_exceeded: 'upload.file_rejected_size',
-      total_size_exceeded: 'upload.file_rejected_size',
-    } as const;
-    await eventsRepo.recordEvent(
-      validity.session.request_id,
-      eventByReason[reservationResult.reason as 'file_count_exceeded' | 'total_size_exceeded']
-    );
+    await eventsRepo.recordEvent(validity.session.request_id, 'upload.file_rejected_size');
     return { kind: 'rejected', reason: reservationResult.reason };
   }
 
   const { reservation } = reservationResult;
   await eventsRepo.recordEvent(validity.session.request_id, 'upload.reservation_created');
 
-  // ---- R1 §1.2: a failed provider signing call releases/marks the reservation failed ----
   try {
     const signed = await getStorageAdapter().createSignedUploadUrl(reservation.storage_object_key);
     await eventsRepo.recordEvent(validity.session.request_id, 'upload.object_signed');
@@ -169,9 +157,81 @@ export type CompleteUploadOutcome =
   | { kind: 'denied'; reason: 'invalid' | 'expired' | 'revoked' | 'used' }
   | {
       kind: 'completion_denied';
-      reason: 'unknown_object_key' | 'foreign_session' | 'not_reserved' | 'provider_metadata_unavailable' | 'metadata_mismatch' | 'extension_mismatch';
+      reason:
+        | 'unknown_object_key'
+        | 'foreign_session'
+        | 'not_reserved'
+        | 'provider_metadata_unavailable'
+        | 'metadata_mismatch'
+        | 'extension_mismatch'
+        | 'session_revalidation_failed';
     }
-  | { kind: 'ok'; fileCount: number };
+  | { kind: 'ok'; fileCount: number; finalized: boolean };
+
+/**
+ * Sends the post-commit upload-complete notification. Extracted so
+ * both completeUploadObject and finishUploadSession (which can also
+ * be the caller that wins finalization, with zero newly-completed
+ * files in this specific call) share identical, once-only email
+ * logic.
+ */
+async function sendUploadCompleteNotification(requestId: string, publicReference: string, fileCount: number): Promise<void> {
+  const email = buildUploadCompleteInternalEmail({ publicReference, fileCount });
+  email.to = serverConfig.intakeInternalToEmail;
+  email.idempotencyKey = `upload-complete/${requestId}`;
+  const sendResult = await sendEmailSafely(email);
+  await eventsRepo.recordEvent(
+    requestId,
+    sendResult.success ? 'request.upload_complete_notification_sent' : 'request.upload_complete_notification_failed'
+  );
+}
+
+type FinalizationTransactionResult =
+  | { kind: 'not_finalized' }
+  | { kind: 'finalized'; requestId: string; publicReference: string; fileCount: number };
+
+/**
+ * R2 (§2.2 steps 6-7): runs INSIDE the caller's already-open
+ * transaction (after the session/reservation locks are held and any
+ * reservation completion for this call has already happened). Counts
+ * completed files, and if finalization is warranted, revalidates
+ * requiring at least one completed file, finalizes the session, and
+ * transitions the request -- all still inside that same transaction.
+ */
+async function maybeFinalizeInTransaction(
+  query: TransactionQuery,
+  lockedSession: { id: string; request_id: string; max_files: number },
+  requestFinish: boolean
+): Promise<FinalizationTransactionResult> {
+  const completedCount = await intakeFilesRepo.countCompletedForSessionInTransaction(query, lockedSession.id);
+  const reachedMax = completedCount >= lockedSession.max_files;
+  if (!requestFinish && !reachedMax) {
+    return { kind: 'not_finalized' };
+  }
+  // R2 §2.2 step 7: "require at least one completed file" before any
+  // finalization -- an explicit finish with zero completed files
+  // must not transition anything.
+  if (completedCount < 1) {
+    await eventsRepo.recordEventInTransaction(query, lockedSession.request_id, 'upload.finalization_rejected_zero_files');
+    return { kind: 'not_finalized' };
+  }
+
+  const finalized = await uploadSessionsRepo.finalizeSessionInTransaction(query, lockedSession.id);
+  if (!finalized) {
+    // Someone else already finalized this session (duplicate finish
+    // or a race with auto-finalization) -- idempotent no-op.
+    return { kind: 'not_finalized' };
+  }
+  await eventsRepo.recordEventInTransaction(query, lockedSession.request_id, 'upload.session_finalized');
+
+  const requestRow = await intakeRequestsRepo.findById(lockedSession.request_id);
+  if (requestRow && intakeRequestsRepo.isAllowedStatusTransition(requestRow.status, 'files_received')) {
+    await intakeRequestsRepo.updateStatusInTransaction(query, requestRow.id, requestRow.status, 'files_received');
+    await eventsRepo.recordEventInTransaction(query, requestRow.id, 'request.files_received');
+    return { kind: 'finalized', requestId: requestRow.id, publicReference: requestRow.public_reference, fileCount: completedCount };
+  }
+  return { kind: 'not_finalized' };
+}
 
 export async function completeUploadObject(
   rawToken: string,
@@ -184,7 +244,6 @@ export async function completeUploadObject(
     return { kind: 'denied', reason: validity.reason };
   }
 
-  // ---- R1 §1.1: resolve the reservation, never an arbitrary bucket object ----
   const reservation = await intakeFilesRepo.findReservationByObjectKey(input.storageObjectKey);
   if (!reservation) {
     await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_unknown_key');
@@ -194,99 +253,107 @@ export async function completeUploadObject(
     await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_foreign_session');
     return { kind: 'completion_denied', reason: 'foreign_session' };
   }
-  if (reservation.reservation_status !== 'reserved') {
-    await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_already_completed');
-    return { kind: 'completion_denied', reason: 'not_reserved' };
-  }
 
-  // ---- R1 §1.3: revalidate using ONLY the provider's own observed metadata ----
+  // R2 §2.2: fetch provider metadata BEFORE opening any transaction
+  // -- this is an external network call and must never happen while
+  // a database connection/transaction is held.
   const verified = await getStorageAdapter().verifyObjectExists(input.storageObjectKey);
   if (!verified) {
     await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch');
     return { kind: 'completion_denied', reason: 'provider_metadata_unavailable' };
   }
-  if (verified.contentType !== reservation.declared_content_type || verified.sizeBytes !== reservation.declared_size_bytes) {
-    await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch');
-    return { kind: 'completion_denied', reason: 'metadata_mismatch' };
-  }
-  if (!isExtensionCompatibleWithMimeType(reservation.original_filename, verified.contentType)) {
-    await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch');
-    return { kind: 'completion_denied', reason: 'extension_mismatch' };
-  }
 
-  const completed = await intakeFilesRepo.completeReservationOnce(reservation.id, verified.contentType, verified.sizeBytes);
-  if (!completed) {
-    // Lost a race against a concurrent completion of the same reservation.
-    await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_already_completed');
-    return { kind: 'completion_denied', reason: 'not_reserved' };
-  }
-  await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_verified');
+  // R2 §2.2 steps 1-6: ONE short transaction, locking session then
+  // reservation (consistent order everywhere), fully revalidating
+  // both before trusting anything about them.
+  const result = await withIntakeTransaction(async (query) => {
+    const lockedSession = await uploadSessionsRepo.lockSessionForUpdate(query, validity.session.id);
+    const lockedReservation = await intakeFilesRepo.lockReservationForUpdate(query, input.storageObjectKey);
 
-  // ---- R1 §1.5: session finalization is exactly-once, session stays active otherwise ----
-  const completedCount = await intakeFilesRepo.countCompletedForSession(validity.session.id);
-  const reachedMax = completedCount >= validity.session.max_files;
-  const shouldFinalize = input.finishSession === true || reachedMax;
-
-  if (shouldFinalize) {
-    const finalized = await uploadSessionsRepo.finalizeSessionOnce(validity.session.id);
-    if (finalized) {
-      // We won the finalization race -- this is the ONLY call that
-      // transitions the request and requests the notification.
-      await eventsRepo.recordEvent(validity.session.request_id, 'upload.session_finalized');
-      const requestRow = await intakeRequestsRepo.findById(validity.session.request_id);
-      if (requestRow && intakeRequestsRepo.isAllowedStatusTransition(requestRow.status, 'files_received')) {
-        await intakeRequestsRepo.updateStatus(requestRow.id, requestRow.status, 'files_received');
-        await eventsRepo.recordEvent(requestRow.id, 'request.files_received');
-
-        const email = buildUploadCompleteInternalEmail({
-          publicReference: requestRow.public_reference,
-          fileCount: completedCount,
-        });
-        email.to = serverConfig.intakeInternalToEmail;
-        email.idempotencyKey = `upload-complete/${validity.session.id}`;
-        const sendResult = await sendEmailSafely(email);
-        await eventsRepo.recordEvent(
-          requestRow.id,
-          sendResult.success
-            ? 'request.upload_complete_notification_sent'
-            : 'request.upload_complete_notification_failed'
-        );
-      }
+    if (
+      !lockedSession ||
+      lockedSession.status !== 'active' ||
+      lockedSession.expires_at.getTime() <= Date.now() ||
+      lockedSession.revoked_at !== null ||
+      lockedSession.finalized_at !== null
+    ) {
+      return { kind: 'session_invalid' as const };
     }
-    // If `finalized` is null, someone else already finalized this
-    // session (e.g. a duplicate finishSession call) -- intentionally
-    // a silent no-op, matching "subsequent completion/finalization
-    // calls are idempotent and do not resend" (§1.5).
-  }
+    if (
+      !lockedReservation ||
+      lockedReservation.reservation_status !== 'reserved' ||
+      lockedReservation.upload_session_id !== lockedSession.id
+    ) {
+      return { kind: 'reservation_invalid' as const };
+    }
+    if (verified.contentType !== lockedReservation.declared_content_type || verified.sizeBytes !== lockedReservation.declared_size_bytes) {
+      return { kind: 'metadata_mismatch' as const };
+    }
+    if (!isExtensionCompatibleWithMimeType(lockedReservation.original_filename, verified.contentType)) {
+      return { kind: 'extension_mismatch' as const };
+    }
 
-  return { kind: 'ok', fileCount: completedCount };
+    const completed = await intakeFilesRepo.completeReservationInTransaction(query, lockedReservation.id, verified.contentType, verified.sizeBytes);
+    if (!completed) {
+      return { kind: 'reservation_invalid' as const };
+    }
+    await eventsRepo.recordEventInTransaction(query, lockedSession.request_id, 'upload.completion_verified');
+
+    const finalization = await maybeFinalizeInTransaction(query, lockedSession, input.finishSession === true);
+    return { kind: 'ok' as const, finalization };
+  });
+
+  switch (result.kind) {
+    case 'session_invalid':
+      await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_session_revalidation_failed');
+      return { kind: 'completion_denied', reason: 'session_revalidation_failed' };
+    case 'reservation_invalid':
+      await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_already_completed');
+      return { kind: 'completion_denied', reason: 'not_reserved' };
+    case 'metadata_mismatch':
+      await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch');
+      return { kind: 'completion_denied', reason: 'metadata_mismatch' };
+    case 'extension_mismatch':
+      await eventsRepo.recordEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch');
+      return { kind: 'completion_denied', reason: 'extension_mismatch' };
+    case 'ok': {
+      // R2 §2.2 step 9: only after commit does the winning caller
+      // request the email.
+      if (result.finalization.kind === 'finalized') {
+        await sendUploadCompleteNotification(result.finalization.requestId, result.finalization.publicReference, result.finalization.fileCount);
+      }
+      const fileCount = await intakeFilesRepo.countCompletedForSession(validity.session.id);
+      return { kind: 'ok', fileCount, finalized: result.finalization.kind === 'finalized' };
+    }
+  }
 }
 
-/** Explicit customer action ("I'm done uploading") without completing another file -- also goes through the same exactly-once finalization path. */
-export async function finishUploadSession(rawToken: string): Promise<{ ok: boolean }> {
+/** Explicit customer "I'm done uploading" action -- also goes through the same atomic revalidate-then-finalize transaction, without completing a new file. `ok` is true only if THIS call actually finalized the session (a zero-completed-file finish, or a finish racing an already-finalized session, reports ok:false). */
+export async function finishUploadSession(rawToken: string): Promise<{ ok: boolean; fileCount: number }> {
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
   const validity = uploadSessionsRepo.evaluateTokenValidity(session);
-  if (!validity.valid) return { ok: false };
+  if (!validity.valid) return { ok: false, fileCount: 0 };
 
-  const finalized = await uploadSessionsRepo.finalizeSessionOnce(validity.session.id);
-  if (finalized) {
-    await eventsRepo.recordEvent(validity.session.request_id, 'upload.session_finalized');
-    const requestRow = await intakeRequestsRepo.findById(validity.session.request_id);
-    if (requestRow && intakeRequestsRepo.isAllowedStatusTransition(requestRow.status, 'files_received')) {
-      const completedCount = await intakeFilesRepo.countCompletedForSession(validity.session.id);
-      await intakeRequestsRepo.updateStatus(requestRow.id, requestRow.status, 'files_received');
-      await eventsRepo.recordEvent(requestRow.id, 'request.files_received');
-
-      const email = buildUploadCompleteInternalEmail({ publicReference: requestRow.public_reference, fileCount: completedCount });
-      email.to = serverConfig.intakeInternalToEmail;
-      email.idempotencyKey = `upload-complete/${validity.session.id}`;
-      const sendResult = await sendEmailSafely(email);
-      await eventsRepo.recordEvent(
-        requestRow.id,
-        sendResult.success ? 'request.upload_complete_notification_sent' : 'request.upload_complete_notification_failed'
-      );
+  const result = await withIntakeTransaction(async (query) => {
+    const lockedSession = await uploadSessionsRepo.lockSessionForUpdate(query, validity.session.id);
+    if (
+      !lockedSession ||
+      lockedSession.status !== 'active' ||
+      lockedSession.expires_at.getTime() <= Date.now() ||
+      lockedSession.revoked_at !== null ||
+      lockedSession.finalized_at !== null
+    ) {
+      return { kind: 'session_invalid' as const };
     }
+    const finalization = await maybeFinalizeInTransaction(query, lockedSession, true);
+    return { kind: 'ok' as const, finalization };
+  });
+
+  if (result.kind === 'ok' && result.finalization.kind === 'finalized') {
+    await sendUploadCompleteNotification(result.finalization.requestId, result.finalization.publicReference, result.finalization.fileCount);
+    return { ok: true, fileCount: result.finalization.fileCount };
   }
-  return { ok: true };
+  const fileCount = await intakeFilesRepo.countCompletedForSession(validity.session.id);
+  return { ok: false, fileCount };
 }

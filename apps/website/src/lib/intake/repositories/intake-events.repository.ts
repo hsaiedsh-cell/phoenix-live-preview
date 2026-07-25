@@ -13,7 +13,7 @@
 // or { reason: 'expired' }).
 // ============================================================
 
-import { intakeQuery } from '../db';
+import { intakeQuery, type TransactionQuery } from '../db';
 
 export type IntakeEventType =
   | 'request.received'
@@ -21,9 +21,12 @@ export type IntakeEventType =
   | 'request.consent_missing'
   | 'request.turnstile_rejected'
   | 'request.turnstile_provider_error'
+  | 'request.turnstile_provider_timeout'
   | 'request.rate_limited_ip'
   | 'request.rate_limited_email'
   | 'request.duplicate_suppressed'
+  | 'request.idempotency_replay'
+  | 'request.idempotency_conflict'
   | 'request.confirmation_email_sent'
   | 'request.confirmation_email_failed'
   | 'request.internal_notification_sent'
@@ -39,10 +42,19 @@ export type IntakeEventType =
   | 'upload.token_denied_revoked'
   | 'upload.token_denied_used'
   | 'upload.token_accepted'
+  | 'upload.reservation_created'
+  | 'upload.reservation_failed'
   | 'upload.object_signed'
   | 'upload.file_rejected_type'
   | 'upload.file_rejected_size'
+  | 'upload.file_rejected_extension'
+  | 'upload.completion_denied_unknown_key'
+  | 'upload.completion_denied_foreign_session'
+  | 'upload.completion_denied_already_completed'
+  | 'upload.completion_denied_metadata_mismatch'
   | 'upload.completion_verified'
+  | 'upload.session_finalized'
+  | 'upload.orphan_cleaned'
   | 'request.files_received'
   | 'request.upload_complete_notification_sent'
   | 'request.upload_complete_notification_failed'
@@ -64,6 +76,27 @@ export async function recordEvent(
   detail: Record<string, unknown> | null = null
 ): Promise<IntakeEventRow> {
   const rows = await intakeQuery<IntakeEventRow>(
+    `INSERT INTO public_intake_events (request_id, event_type, detail)
+     VALUES ($1, $2, $3)
+     RETURNING *`,
+    [requestId, eventType, detail ? JSON.stringify(detail) : null]
+  );
+  return rows[0];
+}
+
+/**
+ * R1: transaction-scoped variant, used when an event must commit or
+ * roll back atomically together with another write — e.g. the
+ * request row itself (PHX-LAUNCH-001-R1 §4.3: "create request +
+ * request.received event in one database transaction").
+ */
+export async function recordEventInTransaction(
+  query: TransactionQuery,
+  requestId: string,
+  eventType: IntakeEventType,
+  detail: Record<string, unknown> | null = null
+): Promise<IntakeEventRow> {
+  const rows = await query<IntakeEventRow>(
     `INSERT INTO public_intake_events (request_id, event_type, detail)
      VALUES ($1, $2, $3)
      RETURNING *`,

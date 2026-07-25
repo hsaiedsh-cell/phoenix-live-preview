@@ -69,6 +69,7 @@ export const uploadSignSchema = z.object({
 
 export const uploadCompleteSchema = z.object({
   storageObjectKey: z.string().trim().min(1).max(500),
+  finishSession: z.boolean().optional().default(false),
 });
 
 /** Maximum accepted JSON body size for every intake/upload POST route. */

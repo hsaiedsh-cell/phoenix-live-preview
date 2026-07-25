@@ -6,7 +6,7 @@
 // no-ORM convention. Every write is server-side only.
 // ============================================================
 
-import { intakeQuery, withIntakeTransaction } from '../db';
+import { intakeQuery, type TransactionQuery } from '../db';
 import { generatePublicReference } from '../reference';
 
 export type IntakeRequestStatus =
@@ -63,63 +63,50 @@ export interface CreateIntakeRequestInput {
 }
 
 /**
- * Finds an existing request by idempotency-key hash if present, else
- * inserts a new one. This single INSERT ... ON CONFLICT DO NOTHING +
- * follow-up SELECT pattern (inside one transaction) is what makes
- * "duplicate row not created on replay" true at the database layer,
- * not only in application logic — see Gate 3/Gate 4 evidence.
+ * R1: plain insert only — no ON CONFLICT / idempotency logic here
+ * anymore. Concurrency-safe idempotent replay resolution (including
+ * the advisory-lock transaction and the 15-minute window) now lives
+ * in submit.service.ts's resolveIdempotentSubmission, which calls
+ * this function only once it has already determined a new row is
+ * genuinely needed. `query` is the caller's transaction-scoped query
+ * function (see db.ts's withIntakeTransaction) so this insert and
+ * the caller's idempotency-key insert and request.received event
+ * insert all commit or roll back together (PHX-LAUNCH-001-R1 §4.3).
  */
-export async function createOrGetByIdempotencyKey(
+export async function insertRequest(
+  query: TransactionQuery,
   input: CreateIntakeRequestInput
-): Promise<{ row: IntakeRequestRow; wasCreated: boolean }> {
-  return withIntakeTransaction(async (query) => {
-    const publicReference = generatePublicReference();
-    const inserted = await query<IntakeRequestRow>(
-      `INSERT INTO public_intake_requests (
-         public_reference, request_type, first_name, last_name,
-         work_email_normalized, company, role, phone, country,
-         estimated_timeline, message, privacy_consent, privacy_version,
-         terms_version, marketing_consent, consent_timestamp,
-         idempotency_key_hash, ip_hash
-       ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$13,$14,now(),$15,$16)
-       ON CONFLICT (idempotency_key_hash) DO NOTHING
-       RETURNING *`,
-      [
-        publicReference,
-        input.requestType,
-        input.firstName,
-        input.lastName,
-        input.workEmailNormalized,
-        input.company,
-        input.role,
-        input.phone ?? null,
-        input.country ?? null,
-        input.estimatedTimeline ?? null,
-        input.message,
-        input.privacyVersion,
-        input.termsVersion,
-        input.marketingConsent,
-        input.idempotencyKeyHash,
-        input.ipHash,
-      ]
-    );
-
-    if (inserted.length > 0) {
-      return { row: inserted[0], wasCreated: true };
-    }
-
-    const existing = await query<IntakeRequestRow>(
-      `SELECT * FROM public_intake_requests WHERE idempotency_key_hash = $1`,
-      [input.idempotencyKeyHash]
-    );
-    if (existing.length === 0) {
-      // Should be unreachable: the ON CONFLICT target guarantees a
-      // matching row exists. Thrown as a structured internal error,
-      // never surfaced verbatim to the client.
-      throw new Error('idempotency_replay_row_missing');
-    }
-    return { row: existing[0], wasCreated: false };
-  });
+): Promise<IntakeRequestRow> {
+  const publicReference = generatePublicReference();
+  const rows = await query<IntakeRequestRow>(
+    `INSERT INTO public_intake_requests (
+       public_reference, request_type, first_name, last_name,
+       work_email_normalized, company, role, phone, country,
+       estimated_timeline, message, privacy_consent, privacy_version,
+       terms_version, marketing_consent, consent_timestamp,
+       idempotency_key_hash, ip_hash
+     ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,true,$12,$13,$14,now(),$15,$16)
+     RETURNING *`,
+    [
+      publicReference,
+      input.requestType,
+      input.firstName,
+      input.lastName,
+      input.workEmailNormalized,
+      input.company,
+      input.role,
+      input.phone ?? null,
+      input.country ?? null,
+      input.estimatedTimeline ?? null,
+      input.message,
+      input.privacyVersion,
+      input.termsVersion,
+      input.marketingConsent,
+      input.idempotencyKeyHash,
+      input.ipHash,
+    ]
+  );
+  return rows[0];
 }
 
 export async function findByPublicReference(publicReference: string): Promise<IntakeRequestRow | null> {
@@ -162,6 +149,31 @@ export async function updateStatus(
     throw new Error(`invalid_status_transition:${fromStatus}->${toStatus}`);
   }
   const rows = await intakeQuery<IntakeRequestRow>(
+    `UPDATE public_intake_requests
+       SET status = $1, updated_at = now()
+       WHERE id = $2 AND status = $3
+       RETURNING *`,
+    [toStatus, id, fromStatus]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * R1 (§4.3): transaction-scoped variant so a status transition can
+ * commit atomically together with e.g. upload-session creation —
+ * "a database failure cannot leave upload_invited without an upload
+ * session."
+ */
+export async function updateStatusInTransaction(
+  query: TransactionQuery,
+  id: string,
+  fromStatus: IntakeRequestStatus,
+  toStatus: IntakeRequestStatus
+): Promise<IntakeRequestRow | null> {
+  if (!isAllowedStatusTransition(fromStatus, toStatus)) {
+    throw new Error(`invalid_status_transition:${fromStatus}->${toStatus}`);
+  }
+  const rows = await query<IntakeRequestRow>(
     `UPDATE public_intake_requests
        SET status = $1, updated_at = now()
        WHERE id = $2 AND status = $3

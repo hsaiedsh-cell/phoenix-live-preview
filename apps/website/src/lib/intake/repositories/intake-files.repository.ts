@@ -1,17 +1,20 @@
 // ============================================================
-// public_intake_files repository
-// PHX-LAUNCH-001
+// public_intake_files repository (R1: reservation model)
+// PHX-LAUNCH-001-R1 §1.1 / §1.2 / §1.3
 // ------------------------------------------------------------
-// Per-session file COUNT and TOTAL byte budget are enforced here in
-// application code (see migration 0001's comment on
-// public_intake_files: PostgreSQL CHECK constraints cannot express a
-// cross-row aggregate). Per-file MIME allowlist and per-file size
-// are enforced both here and by the database CHECK constraints
-// (defense in depth).
+// Every reservation is created inside a transaction that holds
+// `SELECT ... FOR UPDATE` on the parent public_upload_sessions row
+// (see lockUploadSessionForUpdate), so concurrent sign requests for
+// the same session serialize on that row lock and the count/total
+// checks below can never both pass for more reservations than the
+// session's limits allow (PHX-LAUNCH-001-R1 §1.2's required
+// concurrency proof).
 // ============================================================
 
-import { intakeQuery } from '../db';
+import { intakeQuery, type TransactionQuery } from '../db';
 import { UPLOAD_LIMITS } from '../config';
+
+export type ReservationStatus = 'reserved' | 'completed' | 'failed' | 'expired';
 
 export interface IntakeFileRow {
   id: string;
@@ -19,81 +22,188 @@ export interface IntakeFileRow {
   upload_session_id: string;
   storage_object_key: string;
   original_filename: string;
-  content_type: string;
-  size_bytes: number;
+  declared_content_type: string;
+  declared_size_bytes: number;
+  reservation_status: ReservationStatus;
+  verified_content_type: string | null;
+  verified_size_bytes: number | null;
   scan_status: 'pending_review' | 'cleared' | 'quarantined';
   created_at: Date;
+  completed_at: Date | null;
 }
 
-export interface SessionFileTotals {
-  fileCount: number;
-  totalSizeBytes: number;
+export interface LockedSessionRow {
+  id: string;
+  request_id: string;
+  status: string;
+  max_files: number;
+  max_file_size_bytes: number;
+  max_total_size_bytes: number;
+  expires_at: Date;
+  finalized_at: Date | null;
 }
 
-export async function getSessionTotals(uploadSessionId: string): Promise<SessionFileTotals> {
-  const rows = await intakeQuery<{ file_count: string; total_size_bytes: string | null }>(
-    `SELECT count(*) AS file_count, COALESCE(sum(size_bytes), 0) AS total_size_bytes
-     FROM public_intake_files WHERE upload_session_id = $1`,
+/**
+ * Locks the parent session row for the duration of the enclosing
+ * transaction. Every subsequent quota check/insert in that same
+ * transaction is therefore serialized against every other concurrent
+ * signing attempt for the SAME session (PHX-LAUNCH-001-R1 §1.2).
+ */
+export async function lockUploadSessionForUpdate(query: TransactionQuery, uploadSessionId: string): Promise<LockedSessionRow | null> {
+  const rows = await query<LockedSessionRow>(
+    `SELECT id, request_id, status, max_files, max_file_size_bytes, max_total_size_bytes, expires_at, finalized_at
+     FROM public_upload_sessions WHERE id = $1 FOR UPDATE`,
+    [uploadSessionId]
+  );
+  return rows[0] ?? null;
+}
+
+export interface SessionReservationTotals {
+  reservedOrCompletedCount: number;
+  reservedOrCompletedTotalBytes: number;
+}
+
+/**
+ * Counts/sums every NON-failed, NON-expired reservation (i.e.
+ * 'reserved' or 'completed') for the session. Must be called AFTER
+ * lockUploadSessionForUpdate in the same transaction so the result
+ * cannot change underneath the caller before the new reservation is
+ * inserted.
+ */
+export async function getReservationTotalsForUpdate(
+  query: TransactionQuery,
+  uploadSessionId: string
+): Promise<SessionReservationTotals> {
+  const rows = await query<{ cnt: string; total: string | null }>(
+    `SELECT count(*) AS cnt, COALESCE(sum(declared_size_bytes), 0) AS total
+     FROM public_intake_files
+     WHERE upload_session_id = $1 AND reservation_status IN ('reserved', 'completed')`,
     [uploadSessionId]
   );
   return {
-    fileCount: Number(rows[0]?.file_count ?? 0),
-    totalSizeBytes: Number(rows[0]?.total_size_bytes ?? 0),
+    reservedOrCompletedCount: Number(rows[0]?.cnt ?? 0),
+    reservedOrCompletedTotalBytes: Number(rows[0]?.total ?? 0),
   };
 }
 
-export type FileAcceptanceDecision =
+export type ReservationDecision =
   | { accepted: true }
-  | { accepted: false; reason: 'file_count_exceeded' | 'total_size_exceeded' | 'per_file_size_exceeded' | 'content_type_not_allowed' };
+  | { accepted: false; reason: 'file_count_exceeded' | 'total_size_exceeded' | 'per_file_size_exceeded' | 'content_type_not_allowed' | 'extension_not_allowed' };
 
-/** Pure decision function — no I/O — trivially unit-testable without a database. */
-export function evaluateFileAcceptance(
-  totals: SessionFileTotals,
-  candidate: { sizeBytes: number; contentType: string }
-): FileAcceptanceDecision {
-  if (!(UPLOAD_LIMITS.allowedContentTypes as readonly string[]).includes(candidate.contentType)) {
-    return { accepted: false, reason: 'content_type_not_allowed' };
+export async function insertReservation(
+  query: TransactionQuery,
+  input: {
+    requestId: string;
+    uploadSessionId: string;
+    storageObjectKey: string;
+    originalFilename: string;
+    declaredContentType: string;
+    declaredSizeBytes: number;
   }
-  if (candidate.sizeBytes > UPLOAD_LIMITS.maxFileSizeBytes) {
-    return { accepted: false, reason: 'per_file_size_exceeded' };
-  }
-  if (totals.fileCount + 1 > UPLOAD_LIMITS.maxFiles) {
-    return { accepted: false, reason: 'file_count_exceeded' };
-  }
-  if (totals.totalSizeBytes + candidate.sizeBytes > UPLOAD_LIMITS.maxTotalSizeBytes) {
-    return { accepted: false, reason: 'total_size_exceeded' };
-  }
-  return { accepted: true };
-}
-
-export async function recordCompletedFile(input: {
-  requestId: string;
-  uploadSessionId: string;
-  storageObjectKey: string;
-  originalFilename: string;
-  contentType: string;
-  sizeBytes: number;
-}): Promise<IntakeFileRow> {
-  const rows = await intakeQuery<IntakeFileRow>(
+): Promise<IntakeFileRow> {
+  const rows = await query<IntakeFileRow>(
     `INSERT INTO public_intake_files
-       (request_id, upload_session_id, storage_object_key, original_filename, content_type, size_bytes)
-     VALUES ($1, $2, $3, $4, $5, $6)
+       (request_id, upload_session_id, storage_object_key, original_filename, declared_content_type, declared_size_bytes, reservation_status)
+     VALUES ($1, $2, $3, $4, $5, $6, 'reserved')
      RETURNING *`,
     [
       input.requestId,
       input.uploadSessionId,
       input.storageObjectKey,
       input.originalFilename,
-      input.contentType,
-      input.sizeBytes,
+      input.declaredContentType,
+      input.declaredSizeBytes,
     ]
   );
   return rows[0];
+}
+
+/** PHX-LAUNCH-001-R1 §1.2: "a failed provider signing call releases or marks the reservation failed." */
+export async function markReservationFailed(reservationId: string): Promise<void> {
+  await intakeQuery(
+    `UPDATE public_intake_files SET reservation_status = 'failed' WHERE id = $1 AND reservation_status = 'reserved'`,
+    [reservationId]
+  );
+}
+
+export async function findReservationByObjectKey(storageObjectKey: string): Promise<IntakeFileRow | null> {
+  const rows = await intakeQuery<IntakeFileRow>(
+    `SELECT * FROM public_intake_files WHERE storage_object_key = $1`,
+    [storageObjectKey]
+  );
+  return rows[0] ?? null;
+}
+
+/**
+ * Atomically transitions exactly one 'reserved' row to 'completed'.
+ * The `WHERE reservation_status = 'reserved'` clause is what makes
+ * "already-completed object cannot complete twice" true at the
+ * database layer -- a second concurrent completion attempt for the
+ * same row gets an empty result, not a second successful update.
+ */
+export async function completeReservationOnce(
+  reservationId: string,
+  verifiedContentType: string,
+  verifiedSizeBytes: number
+): Promise<IntakeFileRow | null> {
+  const rows = await intakeQuery<IntakeFileRow>(
+    `UPDATE public_intake_files
+       SET reservation_status = 'completed', verified_content_type = $2, verified_size_bytes = $3, completed_at = now()
+       WHERE id = $1 AND reservation_status = 'reserved'
+       RETURNING *`,
+    [reservationId, verifiedContentType, verifiedSizeBytes]
+  );
+  return rows[0] ?? null;
+}
+
+export async function countCompletedForSession(uploadSessionId: string): Promise<number> {
+  const rows = await intakeQuery<{ cnt: string }>(
+    `SELECT count(*) AS cnt FROM public_intake_files WHERE upload_session_id = $1 AND reservation_status = 'completed'`,
+    [uploadSessionId]
+  );
+  return Number(rows[0]?.cnt ?? 0);
 }
 
 export async function listFilesForSession(uploadSessionId: string): Promise<IntakeFileRow[]> {
   return intakeQuery<IntakeFileRow>(
     `SELECT * FROM public_intake_files WHERE upload_session_id = $1 ORDER BY created_at ASC`,
     [uploadSessionId]
+  );
+}
+
+// ---- Orphan handling (PHX-LAUNCH-001-R1 §1.6) ----------------
+
+export interface OrphanReservationRow extends IntakeFileRow {
+  reason: 'expired_reserved' | 'failed';
+}
+
+/**
+ * Reservations that are still 'reserved' but whose parent upload
+ * session has already expired (customer never completed the
+ * upload), plus rows already marked 'failed'. Never includes
+ * 'completed' rows -- completed customer files are never touched by
+ * cleanup.
+ */
+export async function findOrphanReservations(): Promise<OrphanReservationRow[]> {
+  return intakeQuery<OrphanReservationRow>(
+    `SELECT f.*, CASE WHEN f.reservation_status = 'failed' THEN 'failed' ELSE 'expired_reserved' END AS reason
+     FROM public_intake_files f
+     JOIN public_upload_sessions s ON s.id = f.upload_session_id
+     WHERE f.reservation_status = 'failed'
+        OR (f.reservation_status = 'reserved' AND s.expires_at < now())
+     ORDER BY f.created_at ASC`
+  );
+}
+
+/** Marks still-'reserved' rows whose session has expired as 'expired' (does not touch already-'failed' rows or any 'completed' row). */
+export async function expireOrphanReservations(): Promise<IntakeFileRow[]> {
+  return intakeQuery<IntakeFileRow>(
+    `UPDATE public_intake_files f
+       SET reservation_status = 'expired'
+       FROM public_upload_sessions s
+       WHERE f.upload_session_id = s.id
+         AND f.reservation_status = 'reserved'
+         AND s.expires_at < now()
+       RETURNING f.*`
   );
 }

@@ -1,10 +1,18 @@
 // ============================================================
 // Upload-session issuance service
-// PHX-LAUNCH-001
+// PHX-LAUNCH-001 (R1: PHX-LAUNCH-001-R1 §4.3)
 // ------------------------------------------------------------
 // Backs POST /api/intake/:requestId/upload-session. Internal-only
-// (ops secret required by the route handler) — never called from
+// (ops secret required by the route handler) -- never called from
 // browser code. Only valid from status 'under_review'.
+//
+// R1: status transition + session creation + their two core events
+// now commit atomically in ONE transaction (see
+// db.ts's withIntakeTransaction), so a mid-flight database failure
+// can never leave the request in upload_invited without a
+// corresponding upload session. The invitation email is sent only
+// AFTER that transaction commits, carrying a stable per-session
+// provider idempotency key.
 // ============================================================
 
 import * as intakeRequestsRepo from './repositories/intake-requests.repository';
@@ -14,6 +22,7 @@ import { generateRawUploadToken, tokenHash } from './hash';
 import { sendEmailSafely } from './adapters';
 import { buildUploadInvitationEmail } from './adapters/email.adapter';
 import { publicConfig } from './config';
+import { withIntakeTransaction } from './db';
 
 export type IssueUploadSessionOutcome =
   | { kind: 'not_found' }
@@ -29,29 +38,44 @@ export async function issueUploadSession(requestId: string): Promise<IssueUpload
     return { kind: 'invalid_transition', from: existing.status };
   }
 
-  const alreadyActive = await uploadSessionsRepo.findActiveSessionForRequest(requestId);
-  if (alreadyActive) {
-    return { kind: 'session_already_active' };
-  }
-
-  const updated = await intakeRequestsRepo.updateStatus(requestId, existing.status, 'upload_invited');
-  if (!updated) {
-    return { kind: 'invalid_transition', from: existing.status };
-  }
-  await eventsRepo.recordEvent(requestId, 'request.status_changed', { from: existing.status, to: 'upload_invited' });
-
   const rawToken = generateRawUploadToken();
-  const session = await uploadSessionsRepo.createUploadSession(requestId, tokenHash(rawToken));
-  await eventsRepo.recordEvent(requestId, 'request.upload_session_created');
-  await eventsRepo.recordEvent(requestId, 'request.upload_invited');
+
+  const transactionResult = await withIntakeTransaction(async (query) => {
+    // Re-check inside the transaction (TOCTOU-safe): the earlier
+    // findById above is only used for the cheap not_found/invalid_transition
+    // pre-checks; the authoritative check is this one.
+    const alreadyActive = await uploadSessionsRepo.findActiveSessionForRequestInTransaction(query, requestId);
+    if (alreadyActive) {
+      return { kind: 'session_already_active' as const };
+    }
+    const updated = await intakeRequestsRepo.updateStatusInTransaction(query, requestId, existing.status, 'upload_invited');
+    if (!updated) {
+      return { kind: 'invalid_transition' as const, from: existing.status };
+    }
+    await eventsRepo.recordEventInTransaction(query, requestId, 'request.status_changed', {
+      from: existing.status,
+      to: 'upload_invited',
+    });
+    const session = await uploadSessionsRepo.createUploadSessionInTransaction(query, requestId, tokenHash(rawToken));
+    await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_created');
+    await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_invited');
+    return { kind: 'ok' as const, session, publicReference: updated.public_reference, workEmail: updated.work_email_normalized };
+  });
+
+  if (transactionResult.kind !== 'ok') {
+    return transactionResult;
+  }
+
+  const { session, publicReference, workEmail } = transactionResult;
 
   const uploadUrl = `${publicConfig.siteUrl}/upload/${rawToken}`;
   const email = buildUploadInvitationEmail({
-    publicReference: updated.public_reference,
+    publicReference,
     uploadUrl,
     expiresAt: session.expires_at,
   });
-  email.to = updated.work_email_normalized;
+  email.to = workEmail;
+  email.idempotencyKey = `upload-invitation/${session.id}`;
   const sendResult = await sendEmailSafely(email);
   await eventsRepo.recordEvent(
     requestId,

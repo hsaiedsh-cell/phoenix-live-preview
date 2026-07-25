@@ -1,16 +1,27 @@
 // ============================================================
 // POST /api/upload/:token/sign
-// PHX-LAUNCH-001
+// PHX-LAUNCH-001 (R1: PHX-LAUNCH-001-R1 §1.2, §1.4, §2.4)
 // ------------------------------------------------------------
 // Public endpoint, invitation-only. Enforces MIME allowlist,
-// per-file size, per-session file count, and per-session total size
-// before ever calling the storage adapter.
+// extension/MIME compatibility, per-file size, and the
+// concurrency-safe per-session file count / total size budget
+// (see upload-flow.service.ts's signUploadObject) before ever
+// calling the storage adapter.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { signUploadObject } from '@/lib/intake/upload-flow.service';
 import { uploadSignSchema } from '@/lib/intake/schema';
-import { newRequestId, genericErrorResponse, logIntakeEvent, reportInternalError, readBoundedJsonBody } from '@/lib/intake/http';
+import {
+  newRequestId,
+  genericErrorResponse,
+  logIntakeEvent,
+  reportInternalError,
+  readBoundedJsonBody,
+  requireJsonContentType,
+  isCrossSiteBrowserRequest,
+  isOriginAllowed,
+} from '@/lib/intake/http';
 
 export const runtime = 'nodejs';
 
@@ -21,6 +32,18 @@ export async function POST(
   const { token } = await params;
   const requestId = newRequestId();
   const route = 'POST /api/upload/[token]/sign';
+
+  if (!requireJsonContentType(request)) {
+    return genericErrorResponse(415, 'Unsupported Media Type.', requestId);
+  }
+  if (isCrossSiteBrowserRequest(request)) {
+    logIntakeEvent({ requestId, route, outcome: 'cross_site_denied', statusCode: 403 });
+    return genericErrorResponse(403, 'Request denied.', requestId);
+  }
+  if (!isOriginAllowed(request)) {
+    logIntakeEvent({ requestId, route, outcome: 'origin_denied', statusCode: 403 });
+    return genericErrorResponse(403, 'Request denied.', requestId);
+  }
 
   const bodyResult = await readBoundedJsonBody(request);
   if (!bodyResult.ok) {
@@ -41,6 +64,9 @@ export async function POST(
       case 'rejected':
         logIntakeEvent({ requestId, route, outcome: `rejected_${outcome.reason}`, statusCode: 422 });
         return genericErrorResponse(422, 'This file cannot be accepted.', requestId);
+      case 'signing_failed':
+        logIntakeEvent({ requestId, route, outcome: 'signing_failed', statusCode: 503 });
+        return genericErrorResponse(503, 'Please try again in a moment.', requestId);
       case 'ok':
         logIntakeEvent({ requestId, route, outcome: 'ok', statusCode: 200 });
         return NextResponse.json(

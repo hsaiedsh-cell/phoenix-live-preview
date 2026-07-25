@@ -8,7 +8,7 @@
 // (uq_upload_sessions_one_active_per_request partial unique index).
 // ============================================================
 
-import { intakeQuery } from '../db';
+import { intakeQuery, type TransactionQuery } from '../db';
 import { UPLOAD_LIMITS } from '../config';
 
 export type UploadSessionStatus = 'active' | 'used' | 'revoked' | 'expired';
@@ -24,11 +24,24 @@ export interface UploadSessionRow {
   expires_at: Date;
   used_at: Date | null;
   revoked_at: Date | null;
+  finalized_at: Date | null;
   created_at: Date;
 }
 
 export async function findActiveSessionForRequest(requestId: string): Promise<UploadSessionRow | null> {
   const rows = await intakeQuery<UploadSessionRow>(
+    `SELECT * FROM public_upload_sessions WHERE request_id = $1 AND status = 'active'`,
+    [requestId]
+  );
+  return rows[0] ?? null;
+}
+
+/** R1 (§4.3): transaction-scoped read, used inside the same transaction that will also create the session, to avoid a TOCTOU gap. */
+export async function findActiveSessionForRequestInTransaction(
+  query: TransactionQuery,
+  requestId: string
+): Promise<UploadSessionRow | null> {
+  const rows = await query<UploadSessionRow>(
     `SELECT * FROM public_upload_sessions WHERE request_id = $1 AND status = 'active'`,
     [requestId]
   );
@@ -42,6 +55,36 @@ export async function createUploadSession(requestId: string, tokenHash: string):
   }
   const expiresAt = new Date(Date.now() + UPLOAD_LIMITS.tokenExpiryHours * 60 * 60 * 1000);
   const rows = await intakeQuery<UploadSessionRow>(
+    `INSERT INTO public_upload_sessions (request_id, token_hash, max_files, max_file_size_bytes, max_total_size_bytes, expires_at)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     RETURNING *`,
+    [
+      requestId,
+      tokenHash,
+      UPLOAD_LIMITS.maxFiles,
+      UPLOAD_LIMITS.maxFileSizeBytes,
+      UPLOAD_LIMITS.maxTotalSizeBytes,
+      expiresAt,
+    ]
+  );
+  return rows[0];
+}
+
+/**
+ * R1 (§4.3): transaction-scoped insert, called only after
+ * findActiveSessionForRequestInTransaction has confirmed no active
+ * session exists, inside the SAME transaction as the parent
+ * request's status transition to upload_invited — so a mid-flight
+ * failure can never leave the request in upload_invited without a
+ * corresponding session.
+ */
+export async function createUploadSessionInTransaction(
+  query: TransactionQuery,
+  requestId: string,
+  tokenHash: string
+): Promise<UploadSessionRow> {
+  const expiresAt = new Date(Date.now() + UPLOAD_LIMITS.tokenExpiryHours * 60 * 60 * 1000);
+  const rows = await query<UploadSessionRow>(
     `INSERT INTO public_upload_sessions (request_id, token_hash, max_files, max_file_size_bytes, max_total_size_bytes, expires_at)
      VALUES ($1, $2, $3, $4, $5, $6)
      RETURNING *`,
@@ -86,6 +129,27 @@ export async function markSessionUsed(id: string): Promise<void> {
     `UPDATE public_upload_sessions SET status = 'used', used_at = now() WHERE id = $1 AND status = 'active'`,
     [id]
   );
+}
+
+/**
+ * R1 (§1.5): the ONE atomic operation that decides whether THIS
+ * caller is the winner of "first successful session finalization".
+ * `finalized_at IS NULL` in the WHERE clause means only one
+ * concurrent/duplicate call can ever see a non-empty result — every
+ * other caller (including legitimate retries) gets an empty array
+ * and must treat that as "already finalized, do nothing more"
+ * rather than repeating the request.files_received transition or
+ * resending the upload-complete notification.
+ */
+export async function finalizeSessionOnce(id: string): Promise<UploadSessionRow | null> {
+  const rows = await intakeQuery<UploadSessionRow>(
+    `UPDATE public_upload_sessions
+       SET status = 'used', used_at = COALESCE(used_at, now()), finalized_at = now()
+       WHERE id = $1 AND finalized_at IS NULL
+       RETURNING *`,
+    [id]
+  );
+  return rows[0] ?? null;
 }
 
 export async function revokeSession(id: string): Promise<UploadSessionRow | null> {

@@ -108,9 +108,13 @@ CREATE TABLE public_intake_requests (
 CREATE UNIQUE INDEX uq_intake_requests_public_reference
   ON public_intake_requests (public_reference);
 
--- Idempotent replay of the same submission must resolve to the same
--- row, never create a second one.
-CREATE UNIQUE INDEX uq_intake_requests_idempotency_key_hash
+-- R1: idempotency is now a time-bounded 15-minute contract, tracked
+-- in the separate public_intake_idempotency_keys table below (NOT a
+-- forever-unique index on this column) — see that table's header
+-- comment and PHX-LAUNCH-001-R1 §2.2. idempotency_key_hash is kept
+-- here only as non-unique audit/debug metadata on the row that was
+-- actually created.
+CREATE INDEX idx_intake_requests_idempotency_key_hash
   ON public_intake_requests (idempotency_key_hash);
 
 CREATE INDEX idx_intake_requests_work_email
@@ -123,6 +127,41 @@ CREATE INDEX idx_intake_requests_created_at
   ON public_intake_requests (created_at);
 
 ALTER TABLE public_intake_requests ENABLE ROW LEVEL SECURITY;
+
+-- ============================================================
+-- public_intake_idempotency_keys  (R1: 15-minute replay window)
+-- ============================================================
+-- One row per accepted idempotency key. Concurrency-safety and the
+-- "reusable after expiry" contract are both implemented in
+-- application code via `pg_advisory_xact_lock(hashtext(key_hash))`
+-- held for the duration of the check-then-insert transaction (see
+-- submit.service.ts's resolveIdempotentReplay) — NOT via a plain
+-- unique index on idempotency_key_hash alone, since that column is
+-- intentionally allowed to repeat once a prior row has expired.
+--
+-- payload_fingerprint is a hash of the safe matching fields (
+-- normalized work email + requestType, per PHX-LAUNCH-001-R1 §2.1)
+-- so the same key cannot be replayed against a different payload —
+-- a mismatch is rejected as a conflict, not silently accepted.
+CREATE TABLE public_intake_idempotency_keys (
+  id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  idempotency_key_hash    TEXT NOT NULL,
+  payload_fingerprint     TEXT NOT NULL,
+  request_id              UUID NOT NULL REFERENCES public_intake_requests(id) ON DELETE CASCADE,
+  expires_at              TIMESTAMPTZ NOT NULL,
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+-- Not a UNIQUE index (see header comment) — a plain btree is enough
+-- since the advisory lock, not this index, is what prevents a
+-- concurrent duplicate insert.
+CREATE INDEX idx_idempotency_keys_hash_expiry
+  ON public_intake_idempotency_keys (idempotency_key_hash, expires_at);
+
+CREATE INDEX idx_idempotency_keys_request_id
+  ON public_intake_idempotency_keys (request_id);
+
+ALTER TABLE public_intake_idempotency_keys ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================
 -- public_intake_events
@@ -151,9 +190,12 @@ CREATE TABLE public_intake_events (
     'request.consent_missing',
     'request.turnstile_rejected',
     'request.turnstile_provider_error',
+    'request.turnstile_provider_timeout',
     'request.rate_limited_ip',
     'request.rate_limited_email',
     'request.duplicate_suppressed',
+    'request.idempotency_replay',
+    'request.idempotency_conflict',
     'request.confirmation_email_sent',
     'request.confirmation_email_failed',
     'request.internal_notification_sent',
@@ -169,10 +211,19 @@ CREATE TABLE public_intake_events (
     'upload.token_denied_revoked',
     'upload.token_denied_used',
     'upload.token_accepted',
+    'upload.reservation_created',
+    'upload.reservation_failed',
     'upload.object_signed',
     'upload.file_rejected_type',
     'upload.file_rejected_size',
+    'upload.file_rejected_extension',
+    'upload.completion_denied_unknown_key',
+    'upload.completion_denied_foreign_session',
+    'upload.completion_denied_already_completed',
+    'upload.completion_denied_metadata_mismatch',
     'upload.completion_verified',
+    'upload.session_finalized',
+    'upload.orphan_cleaned',
     'request.files_received',
     'request.upload_complete_notification_sent',
     'request.upload_complete_notification_failed',
@@ -207,6 +258,14 @@ CREATE TABLE public_upload_sessions (
   expires_at              TIMESTAMPTZ NOT NULL,
   used_at                 TIMESTAMPTZ NULL,
   revoked_at              TIMESTAMPTZ NULL,
+  -- R1: set exactly once, by an atomic
+  -- `UPDATE ... WHERE finalized_at IS NULL` (see
+  -- upload-flow.service.ts's finalizeSessionOnce). Whichever
+  -- concurrent request wins this update is the ONLY one that
+  -- transitions the parent request to files_received and requests
+  -- the upload-complete notification — see PHX-LAUNCH-001-R1's
+  -- "Session Finalization Semantics" correction.
+  finalized_at            TIMESTAMPTZ NULL,
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
 
   CONSTRAINT chk_upload_sessions_status
@@ -238,25 +297,42 @@ CREATE INDEX idx_upload_sessions_expires_at
 ALTER TABLE public_upload_sessions ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================
--- public_intake_files
+-- public_intake_files  (R1: durable upload RESERVATION record)
 -- ============================================================
--- One row per file accepted into private storage. storage_object_key
--- is always server-generated (see
--- src/storage/intake-object-key.ts) and is never derived from
+-- One row per signed-upload-URL issuance, created in the SAME
+-- transaction as the concurrency-safe quota check (see
+-- upload-flow.service.ts's signUploadObject, which does
+-- `SELECT ... FOR UPDATE` on the parent upload session before
+-- inserting this row) — never created client-side, never created
+-- from client-supplied completion metadata.
+--
+-- storage_object_key is always server-generated (see
+-- src/lib/intake/object-key.ts) and is never derived from
 -- original_filename, which is retained purely as display/audit
 -- metadata and must never be interpolated into a storage path.
+--
+-- declared_* columns are what the client claimed when requesting the
+-- signed URL (used only for the pre-upload quota check).
+-- verified_* columns are populated ONLY from the storage provider's
+-- own observed metadata at completion time (see
+-- StorageAdapter.verifyObjectExists) — completion never trusts
+-- client-supplied contentType/size/filename (PHX-LAUNCH-001-R1 §1.3).
 CREATE TABLE public_intake_files (
   id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   request_id              UUID NOT NULL REFERENCES public_intake_requests(id) ON DELETE CASCADE,
   upload_session_id       UUID NOT NULL REFERENCES public_upload_sessions(id) ON DELETE CASCADE,
-  storage_object_key       TEXT NOT NULL,
+  storage_object_key      TEXT NOT NULL,
   original_filename       TEXT NOT NULL,
-  content_type            TEXT NOT NULL,
-  size_bytes               BIGINT NOT NULL,
-  scan_status              TEXT NOT NULL DEFAULT 'pending_review',
-  created_at               TIMESTAMPTZ NOT NULL DEFAULT now(),
+  declared_content_type   TEXT NOT NULL,
+  declared_size_bytes     BIGINT NOT NULL,
+  reservation_status      TEXT NOT NULL DEFAULT 'reserved',
+  verified_content_type   TEXT NULL,
+  verified_size_bytes     BIGINT NULL,
+  scan_status             TEXT NOT NULL DEFAULT 'pending_review',
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  completed_at            TIMESTAMPTZ NULL,
 
-  CONSTRAINT chk_intake_files_content_type CHECK (content_type IN (
+  CONSTRAINT chk_intake_files_declared_content_type CHECK (declared_content_type IN (
     'application/pdf',
     'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
     'application/vnd.openxmlformats-officedocument.presentationml.presentation',
@@ -265,12 +341,34 @@ CREATE TABLE public_intake_files (
     'image/jpeg',
     'text/plain'
   )),
-  CONSTRAINT chk_intake_files_size
-    CHECK (size_bytes > 0 AND size_bytes <= 20971520),
+  CONSTRAINT chk_intake_files_verified_content_type CHECK (verified_content_type IS NULL OR verified_content_type IN (
+    'application/pdf',
+    'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+    'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+    'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    'image/png',
+    'image/jpeg',
+    'text/plain'
+  )),
+  CONSTRAINT chk_intake_files_declared_size
+    CHECK (declared_size_bytes > 0 AND declared_size_bytes <= 20971520),
+  CONSTRAINT chk_intake_files_verified_size
+    CHECK (verified_size_bytes IS NULL OR (verified_size_bytes > 0 AND verified_size_bytes <= 20971520)),
+  CONSTRAINT chk_intake_files_reservation_status
+    CHECK (reservation_status IN ('reserved', 'completed', 'failed', 'expired')),
   CONSTRAINT chk_intake_files_scan_status
     CHECK (scan_status IN ('pending_review', 'cleared', 'quarantined')),
   CONSTRAINT chk_intake_files_original_filename_len
-    CHECK (char_length(original_filename) BETWEEN 1 AND 255)
+    CHECK (char_length(original_filename) BETWEEN 1 AND 255),
+  -- Defense in depth: completed_at is set if and only if the
+  -- reservation is completed. The application still uses an
+  -- explicit atomic UPDATE ... WHERE reservation_status = 'reserved'
+  -- to prevent a double-completion race; this CHECK cannot by itself
+  -- prevent that race, only detect an inconsistent row.
+  CONSTRAINT chk_intake_files_completed_at_consistency CHECK (
+    (reservation_status = 'completed' AND completed_at IS NOT NULL)
+    OR (reservation_status <> 'completed' AND completed_at IS NULL)
+  )
 );
 
 CREATE UNIQUE INDEX uq_intake_files_storage_object_key
@@ -282,14 +380,15 @@ CREATE INDEX idx_intake_files_request_id
 CREATE INDEX idx_intake_files_upload_session_id
   ON public_intake_files (upload_session_id);
 
--- Per-session file COUNT (<=5) is enforced in application code at
--- insert time (COUNT(*) WHERE upload_session_id = $1 FOR UPDATE),
--- matching this repo's no-ORM, explicit-transaction convention. The
--- per-session TOTAL byte budget (<=60MB) is likewise summed and
--- enforced in application code before each signed-upload URL is
--- issued; PostgreSQL CHECK constraints cannot express a
--- cross-row aggregate. See Gate 6 QA evidence for the enforcement
--- tests covering both limits.
+-- R1: the per-session file COUNT (<=5) and total byte BUDGET
+-- (<=60MB) are now enforced inside one transaction that also holds
+-- `SELECT ... FOR UPDATE` on the parent public_upload_sessions row
+-- (see upload-flow.service.ts's signUploadObject), so concurrent
+-- sign requests serialize on that row lock and cannot jointly
+-- exceed either limit. The count/sum below include every row whose
+-- reservation_status is 'reserved' OR 'completed' (i.e. every
+-- non-failed, non-expired reservation), per PHX-LAUNCH-001-R1 §1.2.
+-- See scripts/qa/gate6r1-upload-r1.qa.ts for the concurrency proof.
 ALTER TABLE public_intake_files ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================

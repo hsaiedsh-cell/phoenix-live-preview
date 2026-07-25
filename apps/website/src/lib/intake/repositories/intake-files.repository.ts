@@ -40,6 +40,7 @@ export interface LockedSessionRow {
   max_file_size_bytes: number;
   max_total_size_bytes: number;
   expires_at: Date;
+  revoked_at: Date | null;
   finalized_at: Date | null;
 }
 
@@ -51,7 +52,7 @@ export interface LockedSessionRow {
  */
 export async function lockUploadSessionForUpdate(query: TransactionQuery, uploadSessionId: string): Promise<LockedSessionRow | null> {
   const rows = await query<LockedSessionRow>(
-    `SELECT id, request_id, status, max_files, max_file_size_bytes, max_total_size_bytes, expires_at, finalized_at
+    `SELECT id, request_id, status, max_files, max_file_size_bytes, max_total_size_bytes, expires_at, revoked_at, finalized_at
      FROM public_upload_sessions WHERE id = $1 FOR UPDATE`,
     [uploadSessionId]
   );

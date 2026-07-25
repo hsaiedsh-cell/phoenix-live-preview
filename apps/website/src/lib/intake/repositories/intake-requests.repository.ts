@@ -125,6 +125,23 @@ export async function findById(id: string): Promise<IntakeRequestRow | null> {
   return rows[0] ?? null;
 }
 
+/**
+ * R3 (§1): transaction-scoped lock/read, used by upload finalization
+ * so the parent request row is locked and revalidated INSIDE the same
+ * transaction that also holds the upload-session and reservation
+ * locks -- never read via the global pool (findById) from inside a
+ * withIntakeTransaction callback, which previously both risked a
+ * pool self-deadlock under concurrency and left the request row
+ * completely unlocked/unrevalidated at the moment of finalization.
+ */
+export async function lockRequestForUpdate(query: TransactionQuery, id: string): Promise<IntakeRequestRow | null> {
+  const rows = await query<IntakeRequestRow>(
+    `SELECT * FROM public_intake_requests WHERE id = $1 FOR UPDATE`,
+    [id]
+  );
+  return rows[0] ?? null;
+}
+
 const ALLOWED_TRANSITIONS: Record<IntakeRequestStatus, IntakeRequestStatus[]> = {
   received: ['under_review', 'rejected', 'closed'],
   under_review: ['upload_invited', 'rejected', 'quoted', 'closed'],

@@ -57,6 +57,7 @@ export type IntakeEventType =
   | 'upload.completion_denied_session_revalidation_failed'
   | 'upload.completion_verified'
   | 'upload.finalization_rejected_zero_files'
+  | 'upload.finalization_denied_request_state'
   | 'upload.session_finalized'
   | 'upload.orphan_cleaned'
   | 'upload.orphan_object_deleted'

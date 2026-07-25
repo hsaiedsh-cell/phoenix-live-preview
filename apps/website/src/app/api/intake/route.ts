@@ -66,6 +66,17 @@ export async function POST(request: Request): Promise<NextResponse> {
         logIntakeEvent({ requestId, route, outcome: 'idempotency_conflict', statusCode: 409 });
         return genericErrorResponse(409, 'This request could not be processed. Please refresh and try again.', requestId);
 
+      case 'submission_in_progress':
+        // R2 §1.2 item 5: a bounded, safe response for a concurrent
+        // duplicate submission that is still being processed by
+        // another in-flight attempt with the same idempotency key --
+        // never creates a second request, never calls Turnstile
+        // again. 202 Accepted signals "your prior submission is still
+        // being handled", distinct from both success (200) and any
+        // error status.
+        logIntakeEvent({ requestId, route, outcome: 'submission_in_progress', statusCode: 202 });
+        return NextResponse.json({ status: 'in_progress', requestId }, { status: 202 });
+
       case 'turnstile_rejected':
         logIntakeEvent({ requestId, route, outcome: 'turnstile_rejected', statusCode: 400 });
         return genericErrorResponse(400, 'We could not verify your submission. Please try again.', requestId);

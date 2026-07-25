@@ -129,34 +129,77 @@ CREATE INDEX idx_intake_requests_created_at
 ALTER TABLE public_intake_requests ENABLE ROW LEVEL SECURITY;
 
 -- ============================================================
--- public_intake_idempotency_keys  (R1: 15-minute replay window)
+-- public_intake_idempotency_keys  (R2: transaction-pooler-compatible
+-- state machine — replaces R1's session-scoped advisory-lock design)
 -- ============================================================
--- One row per accepted idempotency key. Concurrency-safety and the
--- "reusable after expiry" contract are both implemented in
--- application code via `pg_advisory_xact_lock(hashtext(key_hash))`
--- held for the duration of the check-then-insert transaction (see
--- submit.service.ts's resolveIdempotentReplay) — NOT via a plain
--- unique index on idempotency_key_hash alone, since that column is
--- intentionally allowed to repeat once a prior row has expired.
+-- R1 used a session-scoped `pg_advisory_lock`, held for the whole
+-- submit flow including the external Turnstile call. That requires
+-- a persistent session-mode database connection, which the target
+-- Vercel serverless runtime cannot guarantee when traffic is routed
+-- through Supabase's transaction-mode connection pooler (the
+-- normally-recommended mode for serverless traffic) — a pooler may
+-- hand different physical connections to different statements within
+-- what the application believes is one "session", silently breaking
+-- session-scoped locks. R1 also discovered a real pool self-deadlock
+-- under concurrency once the advisory-lock client's own nested
+-- queries needed additional connections from the same saturated pool.
 --
--- payload_fingerprint is a hash of the safe matching fields (
--- normalized work email + requestType, per PHX-LAUNCH-001-R1 §2.1)
--- so the same key cannot be replayed against a different payload —
--- a mismatch is rejected as a conflict, not silently accepted.
+-- R2 replaces both the lock mechanism and the underlying assumption:
+-- there is no advisory lock anywhere in this table's usage. Instead,
+-- idempotency_key_hash is a genuine UNIQUE column, and every state
+-- transition is a single atomic statement (INSERT ... ON CONFLICT ...
+-- DO UPDATE ... WHERE, or an owner-checked UPDATE), each its own
+-- short transaction that a transaction-mode pooler handles fine —
+-- never a session-scoped lock, never a connection held open across
+-- an external network call. See submit.service.ts's
+-- claimIdempotencyKey / releaseIdempotencyClaim / completeIdempotencyClaim.
+--
+-- state machine:
+--   pending    -- claimed by exactly one attempt (owner_token_hash
+--                 identifies which one); only that owner may
+--                 complete or fail it.
+--   completed  -- request_id is set; a matching-fingerprint replay
+--                 returns the same public reference without ever
+--                 touching Turnstile again.
+--   failed     -- immediately reclaimable by a new attempt, same as
+--                 an expired row.
+--
+-- payload_fingerprint is a hash of the safe matching fields
+-- (normalized work email + requestType) so the same key cannot be
+-- replayed against a different payload — a mismatch is rejected as a
+-- conflict, not silently accepted, in either the pending or
+-- completed state.
 CREATE TABLE public_intake_idempotency_keys (
   id                      UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   idempotency_key_hash    TEXT NOT NULL,
   payload_fingerprint     TEXT NOT NULL,
-  request_id              UUID NOT NULL REFERENCES public_intake_requests(id) ON DELETE CASCADE,
+  state                   TEXT NOT NULL DEFAULT 'pending',
+  -- Hash of a server-generated, per-claim-attempt random token.
+  -- Never derived from or equal to any client-supplied value.
+  -- Proves "only the owner of the active claim may complete or fail
+  -- it" (R2 §1.2 item 7) without needing a session-scoped lock.
+  owner_token_hash        TEXT NOT NULL,
+  request_id              UUID NULL REFERENCES public_intake_requests(id) ON DELETE CASCADE,
   expires_at              TIMESTAMPTZ NOT NULL,
-  created_at              TIMESTAMPTZ NOT NULL DEFAULT now()
+  created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+  updated_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
+
+  CONSTRAINT chk_idempotency_keys_state CHECK (state IN ('pending', 'completed', 'failed')),
+  -- request_id is set if and only if the claim is completed.
+  CONSTRAINT chk_idempotency_keys_request_id_consistency CHECK (
+    (state = 'completed' AND request_id IS NOT NULL)
+    OR (state <> 'completed' AND request_id IS NULL)
+  )
 );
 
--- Not a UNIQUE index (see header comment) — a plain btree is enough
--- since the advisory lock, not this index, is what prevents a
--- concurrent duplicate insert.
-CREATE INDEX idx_idempotency_keys_hash_expiry
-  ON public_intake_idempotency_keys (idempotency_key_hash, expires_at);
+-- Genuinely UNIQUE this time (unlike R1) — the atomic
+-- INSERT ... ON CONFLICT (idempotency_key_hash) DO UPDATE ... WHERE
+-- pattern is exactly what requires this to be a real unique
+-- constraint; it is what the database uses to detect "is there
+-- already an active claim for this key" in a single statement, with
+-- no separate lock of any kind.
+CREATE UNIQUE INDEX uq_idempotency_keys_hash
+  ON public_intake_idempotency_keys (idempotency_key_hash);
 
 CREATE INDEX idx_idempotency_keys_request_id
   ON public_intake_idempotency_keys (request_id);
@@ -196,6 +239,8 @@ CREATE TABLE public_intake_events (
     'request.duplicate_suppressed',
     'request.idempotency_replay',
     'request.idempotency_conflict',
+    'request.idempotency_in_progress',
+    'request.idempotency_claim_released',
     'request.confirmation_email_sent',
     'request.confirmation_email_failed',
     'request.internal_notification_sent',
@@ -221,9 +266,13 @@ CREATE TABLE public_intake_events (
     'upload.completion_denied_foreign_session',
     'upload.completion_denied_already_completed',
     'upload.completion_denied_metadata_mismatch',
+    'upload.completion_denied_session_revalidation_failed',
     'upload.completion_verified',
+    'upload.finalization_rejected_zero_files',
     'upload.session_finalized',
     'upload.orphan_cleaned',
+    'upload.orphan_object_deleted',
+    'upload.orphan_object_delete_failed',
     'request.files_received',
     'request.upload_complete_notification_sent',
     'request.upload_complete_notification_failed',
@@ -314,7 +363,7 @@ ALTER TABLE public_upload_sessions ENABLE ROW LEVEL SECURITY;
 -- declared_* columns are what the client claimed when requesting the
 -- signed URL (used only for the pre-upload quota check).
 -- verified_* columns are populated ONLY from the storage provider's
--- own observed metadata at completion time (see
+-- own provider-recorded size/Content-Type metadata at completion time (see
 -- StorageAdapter.verifyObjectExists) — completion never trusts
 -- client-supplied contentType/size/filename (PHX-LAUNCH-001-R1 §1.3).
 CREATE TABLE public_intake_files (

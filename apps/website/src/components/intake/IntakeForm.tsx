@@ -36,6 +36,7 @@ type SubmitState =
   | { status: 'submitting' }
   | { status: 'success'; publicReference: string }
   | { status: 'rate_limited' }
+  | { status: 'in_progress' }
   | { status: 'error'; message: string };
 
 function generateIdempotencyKey(): string {
@@ -145,6 +146,14 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
 
       if (response.status === 429) {
         setState({ status: 'rate_limited' });
+        return;
+      }
+      if (response.status === 202) {
+        // R2: a prior submission with this same idempotency key is
+        // still being processed by another in-flight attempt. Not an
+        // error -- do not resubmit, do not rotate the idempotency
+        // key.
+        setState({ status: 'in_progress' });
         return;
       }
       if (!response.ok) {
@@ -362,6 +371,11 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
       {state.status === 'rate_limited' && (
         <p className="text-sm text-amber-600" role="alert">
           You&apos;ve submitted a few requests recently — please wait a bit before trying again.
+        </p>
+      )}
+      {state.status === 'in_progress' && (
+        <p className="text-sm text-amber-600" role="status">
+          Your previous submission is still being processed. Please wait a moment rather than submitting again.
         </p>
       )}
 

@@ -297,17 +297,21 @@ async function main() {
   const noHeaderRequest = new Request('https://example.test/api/intake', { method: 'POST' });
   assert(isCrossSiteBrowserRequest(noHeaderRequest) === false, 'absent Sec-Fetch-Site header (e.g. non-browser client) is not denied by this check alone');
 
-  section('14. R1 §2.4: Origin validation');
+  section('14. R1 §2.4: Origin validation (superseded by R3 §6 -- see gate6-origin-allowlist-r3.qa.ts for the full exact-allowlist proof)');
   const badOriginRequest = new Request('https://example.test/api/intake', {
     method: 'POST',
     headers: { origin: 'https://attacker.example' },
   });
   assert(isOriginAllowed(badOriginRequest) === false, 'a present, mismatched Origin is rejected');
-  const vercelPreviewRequest = new Request('https://example.test/api/intake', {
+  // R3 removed the broad *.vercel.app wildcard this test originally
+  // exercised here -- an arbitrary, unconfigured Vercel preview
+  // origin is now correctly DENIED unless explicitly listed in
+  // ALLOWED_PREVIEW_ORIGINS (see gate6-origin-allowlist-r3.qa.ts).
+  const unconfiguredVercelRequest = new Request('https://example.test/api/intake', {
     method: 'POST',
     headers: { origin: 'https://phoenix-preview-abc123-team.vercel.app' },
   });
-  assert(isOriginAllowed(vercelPreviewRequest) === true, 'a Vercel Preview origin is allowed by the documented policy');
+  assert(isOriginAllowed(unconfiguredVercelRequest) === false, 'an unconfigured Vercel preview origin is denied under R3\'s exact-allowlist policy (no more wildcard)');
   const noOriginRequest = new Request('https://example.test/api/intake', { method: 'POST' });
   assert(isOriginAllowed(noOriginRequest) === true, 'an absent Origin header is not rejected by this check');
 

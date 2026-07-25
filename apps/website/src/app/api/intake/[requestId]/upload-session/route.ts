@@ -42,9 +42,22 @@ export async function POST(
     return genericErrorResponse(401, 'Unauthorized.', requestId);
   }
 
+  // R4 (§5): malformed/oversized/schema-invalid bodies must be
+  // rejected explicitly -- never silently treated as { revoke: false }
+  // (which would issue an upload invitation the caller never asked
+  // for, possibly when they actually intended a revoke). No service
+  // function is called on any of these paths.
   const bodyResult = await readBoundedJsonBody(request);
-  const parsedBody = bodyResult.ok ? bodySchema.safeParse(bodyResult.body) : null;
-  const revoke = parsedBody?.success ? parsedBody.data.revoke : false;
+  if (!bodyResult.ok) {
+    logIntakeEvent({ requestId, route, outcome: 'malformed_or_oversized_body', statusCode: 413 });
+    return genericErrorResponse(413, 'Request could not be processed.', requestId);
+  }
+  const parsedBody = bodySchema.safeParse(bodyResult.body);
+  if (!parsedBody.success) {
+    logIntakeEvent({ requestId, route, outcome: 'validation_error', statusCode: 422 });
+    return genericErrorResponse(422, 'Invalid request body.', requestId);
+  }
+  const revoke = parsedBody.data.revoke;
 
   try {
     if (revoke) {

@@ -1,5 +1,12 @@
 // ============================================================
-// QA: Gate 4 -- Intake security (R1: PHX-LAUNCH-001-R1 §2)
+// QA: Gate 4 -- Intake security (originally R1: PHX-LAUNCH-001-R1 §2;
+// still runs unmodified against R2's lock-free submit.service.ts --
+// R2 preserved every public outcome kind this file asserts on. The
+// one section updated for R2 is the concurrency proof, which now
+// tolerates submission_in_progress for non-winning racers instead of
+// assuming every concurrent call blocks until accepted -- see
+// gate1-idempotency-r2.qa.ts for the authoritative, larger-scale
+// version of that same proof.)
 // EXECUTED against a real local Postgres instance. Turnstile and
 // Email are injected fakes -- this file never calls the real
 // Cloudflare or Resend APIs. Every assertion below is genuinely run.
@@ -18,6 +25,23 @@ import { createFakeTurnstileVerifier } from '../../src/lib/intake/adapters/turns
 import { createFakeEmailSender } from '../../src/lib/intake/adapters/email.adapter';
 import { CURRENT_PRIVACY_VERSION, CURRENT_TERMS_VERSION } from '../../src/lib/intake/config';
 import { genericErrorResponse, readBoundedJsonBody, requireJsonContentType, isCrossSiteBrowserRequest, isOriginAllowed } from '../../src/lib/intake/http';
+
+// Random (not literal/hardcoded) source IPs per test run -- this
+// script's IP-based rate-limit assertions are only meaningful if
+// each run uses IPs that have never been seen by this database
+// before. Hardcoded literals (this script's original R1 form) can
+// accumulate real rate-limit hits across many manual re-runs against
+// a shared persistent local database, which looks like a false
+// failure -- it isn't a product bug, just IP reuse across runs.
+const RUN_PREFIX = Math.floor(Math.random() * 200) + 1;
+let ipCounter = 0;
+function uniqueIpPrefix(): string {
+  return `203.${RUN_PREFIX}.${Math.floor(Math.random() * 250) + 1}`;
+}
+function uniqueIp(): string {
+  ipCounter += 1;
+  return `${uniqueIpPrefix()}.${ipCounter % 250}`;
+}
 
 function baseInput(overrides: Record<string, unknown> = {}) {
   return {
@@ -44,7 +68,7 @@ async function main() {
   const fakeEmail1 = createFakeEmailSender('always_succeed');
   __setEmailForTests(fakeEmail1);
   const validInput = baseInput();
-  const outcome1 = await submitIntakeRequest(validInput, { rawIp: '203.0.113.10' });
+  const outcome1 = await submitIntakeRequest(validInput, { rawIp: uniqueIp() });
   assert(outcome1.kind === 'accepted', 'valid submission is accepted');
   if (outcome1.kind === 'accepted') {
     assert(isValidPublicReference(outcome1.publicReference), 'accepted response has a valid public reference format');
@@ -60,7 +84,7 @@ async function main() {
   section('2. Invalid fields rejected');
   __setTurnstileForTests(createFakeTurnstileVerifier([{ success: true }]));
   __setEmailForTests(createFakeEmailSender());
-  const invalidOutcome = await submitIntakeRequest(baseInput({ workEmail: 'not-an-email' }), { rawIp: '203.0.113.11' });
+  const invalidOutcome = await submitIntakeRequest(baseInput({ workEmail: 'not-an-email' }), { rawIp: uniqueIp() });
   assert(invalidOutcome.kind === 'validation_error', 'malformed work email rejected with validation_error');
   __resetAdaptersForTests();
 
@@ -76,8 +100,8 @@ async function main() {
     const fakeEmail = createFakeEmailSender();
     __setEmailForTests(fakeEmail);
     const replayInput = baseInput({ workEmail: `replay-before-turnstile-${randomUUID()}@acme.example` });
-    const first = await submitIntakeRequest(replayInput, { rawIp: '203.0.113.40' });
-    const second = await submitIntakeRequest(replayInput, { rawIp: '203.0.113.41' });
+    const first = await submitIntakeRequest(replayInput, { rawIp: uniqueIp() });
+    const second = await submitIntakeRequest(replayInput, { rawIp: uniqueIp() });
     assert(first.kind === 'accepted' && second.kind === 'accepted', 'both calls return accepted');
     if (first.kind === 'accepted' && second.kind === 'accepted') {
       assert(first.publicReference === second.publicReference, 'replay returns the SAME public reference');
@@ -94,12 +118,12 @@ async function main() {
     __setEmailForTests(createFakeEmailSender());
     const sharedKey = randomUUID();
     const firstEmail = `conflict-a-${randomUUID()}@acme.example`;
-    const first = await submitIntakeRequest(baseInput({ idempotencyKey: sharedKey, workEmail: firstEmail }), { rawIp: '203.0.113.42' });
+    const first = await submitIntakeRequest(baseInput({ idempotencyKey: sharedKey, workEmail: firstEmail }), { rawIp: uniqueIp() });
     assert(first.kind === 'accepted', 'first submission with this key succeeds');
     // Same key, DIFFERENT email -> different payload fingerprint.
     const second = await submitIntakeRequest(
       baseInput({ idempotencyKey: sharedKey, workEmail: `conflict-b-${randomUUID()}@acme.example` }),
-      { rawIp: '203.0.113.43' }
+      { rawIp: uniqueIp() }
     );
     assert(second.kind === 'idempotency_conflict', 'same key + changed payload (different email) is rejected as idempotency_conflict, not silently accepted');
   }
@@ -111,7 +135,7 @@ async function main() {
     __setEmailForTests(createFakeEmailSender());
     const expiryKey = randomUUID();
     const expiryInput = baseInput({ idempotencyKey: expiryKey, workEmail: `expiry-${randomUUID()}@acme.example` });
-    const first = await submitIntakeRequest(expiryInput, { rawIp: '203.0.113.44' });
+    const first = await submitIntakeRequest(expiryInput, { rawIp: uniqueIp() });
     assert(first.kind === 'accepted', 'first submission succeeds');
     // Directly simulate the 15-minute window having elapsed, rather
     // than actually waiting 15 real minutes in this QA run.
@@ -120,7 +144,7 @@ async function main() {
       `UPDATE public_intake_idempotency_keys SET expires_at = now() - interval '1 minute' WHERE idempotency_key_hash = $1`,
       [idempotencyKeyHash(expiryKey)]
     );
-    const second = await submitIntakeRequest(expiryInput, { rawIp: '203.0.113.45' });
+    const second = await submitIntakeRequest(expiryInput, { rawIp: uniqueIp() });
     assert(second.kind === 'accepted', 'second submission with the now-expired key is accepted as a NEW request');
     if (first.kind === 'accepted' && second.kind === 'accepted') {
       assert(first.publicReference !== second.publicReference, 'the new request has a DIFFERENT public reference than the expired one');
@@ -137,15 +161,25 @@ async function main() {
     const concurrentEmail = `concurrent-${randomUUID()}@acme.example`;
     const concurrentInput = baseInput({ idempotencyKey: concurrentKey, workEmail: concurrentEmail });
     const results = await Promise.all([
-      submitIntakeRequest(concurrentInput, { rawIp: '203.0.113.50' }),
-      submitIntakeRequest(concurrentInput, { rawIp: '203.0.113.51' }),
-      submitIntakeRequest(concurrentInput, { rawIp: '203.0.113.52' }),
-      submitIntakeRequest(concurrentInput, { rawIp: '203.0.113.53' }),
-      submitIntakeRequest(concurrentInput, { rawIp: '203.0.113.54' }),
+      submitIntakeRequest(concurrentInput, { rawIp: uniqueIp() }),
+      submitIntakeRequest(concurrentInput, { rawIp: uniqueIp() }),
+      submitIntakeRequest(concurrentInput, { rawIp: uniqueIp() }),
+      submitIntakeRequest(concurrentInput, { rawIp: uniqueIp() }),
+      submitIntakeRequest(concurrentInput, { rawIp: uniqueIp() }),
     ]);
     const references = new Set(results.filter((r) => r.kind === 'accepted').map((r) => (r as { publicReference: string }).publicReference));
-    assert(results.every((r) => r.kind === 'accepted'), 'all 5 truly concurrent calls with the same key resolve to accepted (none crash or error)');
-    assert(references.size === 1, `all 5 concurrent calls resolve to the SAME single public reference (got ${references.size} distinct references)`);
+    // Note: as of R2, a racer that observes the winner's claim still
+    // 'pending' correctly receives submission_in_progress rather than
+    // blocking until it can also return 'accepted' (R1's session-lock
+    // design serialized/blocked losers instead). With only 5 calls
+    // against a fast local database, every call typically resolves
+    // 'accepted' by the time it checks -- but this assertion tolerates
+    // either outcome so it is not timing-fragile; see
+    // gate1-idempotency-r2.qa.ts §1-2 for the authoritative, larger-
+    // scale (25-way) version of this proof.
+    const invalidOutcomes = results.filter((r) => r.kind !== 'accepted' && r.kind !== 'submission_in_progress');
+    assert(invalidOutcomes.length === 0, `all 5 concurrent calls with the same key resolve to accepted or submission_in_progress, never an error (found: ${invalidOutcomes.map((r) => r.kind).join(',')})`);
+    assert(references.size === 1, `every ACCEPTED result among the 5 concurrent calls resolves to the SAME single public reference (got ${references.size} distinct references)`);
     const rows = await intakeQuery<{ count: string }>(
       `SELECT count(*) FROM public_intake_requests WHERE work_email_normalized = $1`,
       [concurrentEmail]
@@ -164,7 +198,7 @@ async function main() {
     __setEmailForTests(createFakeEmailSender());
     for (let i = 0; i < 5; i += 1) {
       const outcome = await submitIntakeRequest(baseInput({ workEmail: victimEmail, idempotencyKey: randomUUID() }), {
-        rawIp: `198.51.100.${10 + i}`,
+        rawIp: `${uniqueIpPrefix()}.${10 + i}`,
       });
       assert(outcome.kind === 'turnstile_rejected', `attacker attempt ${i + 1} with invalid Turnstile is rejected as turnstile_rejected, not rate_limited`);
     }
@@ -177,7 +211,7 @@ async function main() {
     __setTurnstileForTests(createFakeTurnstileVerifier([{ success: true }]));
     __setEmailForTests(createFakeEmailSender());
     const victimOutcome = await submitIntakeRequest(baseInput({ workEmail: victimEmail, idempotencyKey: randomUUID() }), {
-      rawIp: '203.0.113.60',
+      rawIp: uniqueIp(),
     });
     assert(
       victimOutcome.kind === 'accepted',
@@ -190,7 +224,7 @@ async function main() {
   {
     __setTurnstileForTests(createFakeTurnstileVerifier(Array.from({ length: 6 }, () => ({ success: false, reason: 'invalid_token' as const }))));
     __setEmailForTests(createFakeEmailSender());
-    const sharedIp = `198.51.100.${Math.floor(Math.random() * 50) + 100}`;
+    const sharedIp = `${uniqueIpPrefix()}.${Math.floor(Math.random() * 50) + 100}`;
     let ipLimited = false;
     for (let i = 0; i < 6; i += 1) {
       const outcome = await submitIntakeRequest(baseInput({ workEmail: `ip6-${i}-${randomUUID()}@acme.example`, idempotencyKey: randomUUID() }), {
@@ -210,7 +244,7 @@ async function main() {
     // as a success.
     __setTurnstileForTests(createFakeTurnstileVerifier([{ success: false, reason: 'provider_error' }]));
     __setEmailForTests(createFakeEmailSender());
-    const outcome = await submitIntakeRequest(baseInput(), { rawIp: '203.0.113.70' });
+    const outcome = await submitIntakeRequest(baseInput(), { rawIp: uniqueIp() });
     assert(outcome.kind === 'turnstile_provider_error', 'a Turnstile provider failure/timeout results in turnstile_provider_error, never accepted');
   }
   __resetAdaptersForTests();
@@ -280,8 +314,9 @@ async function main() {
   section('15. Raw IP is never stored -- only its HMAC hash');
   __setTurnstileForTests(createFakeTurnstileVerifier([{ success: true }]));
   __setEmailForTests(createFakeEmailSender());
+  const rawIpForHashCheck = uniqueIp();
   const ipCheckOutcome = await submitIntakeRequest(baseInput({ workEmail: `ipcheck-${randomUUID()}@acme.example` }), {
-    rawIp: '203.0.113.99',
+    rawIp: rawIpForHashCheck,
   });
   if (ipCheckOutcome.kind === 'accepted') {
     const rows = await intakeQuery<{ ip_hash: string | null }>(
@@ -289,7 +324,7 @@ async function main() {
       [ipCheckOutcome.publicReference]
     );
     const storedHash = rows[0]?.ip_hash;
-    assert(!!storedHash && storedHash !== '203.0.113.99', 'stored ip_hash is not equal to the raw IP');
+    assert(!!storedHash && storedHash !== rawIpForHashCheck, 'stored ip_hash is not equal to the raw IP');
     assert(!!storedHash && /^[0-9a-f]{64}$/.test(storedHash), 'stored ip_hash looks like a 64-hex-char SHA-256 HMAC, not raw data');
   } else {
     assert(false, `expected acceptance for ip-hash check but got ${ipCheckOutcome.kind}`);

@@ -73,6 +73,10 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
     if (w.turnstile && turnstileWidgetRef.current) {
       turnstileWidgetIdRef.current = w.turnstile.render(turnstileWidgetRef.current, {
         sitekey: turnstileSiteKey,
+        // R4 §7: matches the server-side TURNSTILE_EXPECTED_ACTION
+        // default (turnstile.adapter.ts) -- Cloudflare echoes this
+        // back in the Siteverify response for the server to check.
+        action: 'public-intake',
         callback: (token: string) => {
           setTurnstileToken(token);
           setTurnstileError('');

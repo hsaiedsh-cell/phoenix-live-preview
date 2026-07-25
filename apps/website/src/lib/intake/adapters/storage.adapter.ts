@@ -14,9 +14,13 @@
 // the caller (see ../object-key.ts) -- this module never derives a
 // key from a filename.
 //
-// R1: verifyObjectExists now returns the PROVIDER-OBSERVED content
-// type alongside size. Completion must never trust a client-supplied
-// contentType (see upload-flow.service.ts) -- only this value.
+// R1/R2: verifyObjectExists now returns the provider-recorded size
+// and Content-Type metadata alongside size. Supabase Storage records
+// the Content-Type the upload request DECLARED at PUT time -- this is
+// not independent file-byte MIME sniffing/detection, and nothing in
+// this codebase should describe it that way (PHX-LAUNCH-001-R2 §5).
+// Completion must never trust a client-supplied contentType (see
+// upload-flow.service.ts) -- only this provider-recorded value.
 // FAIL CLOSED: if Supabase Storage's own object metadata is missing
 // mimetype (which normally cannot happen -- Storage always records
 // the type from the actual PUT's Content-Type -- but could in
@@ -40,16 +44,34 @@ export interface VerifiedObjectMetadata {
   contentType: string;
 }
 
+export interface DeleteObjectResult {
+  /** True when the object was deleted OR was already absent (idempotent success — see header comment). */
+  success: boolean;
+}
+
 export interface StorageAdapter {
   /** Creates a one-time signed upload URL scoped to exactly one object key. */
   createSignedUploadUrl(objectKey: string): Promise<SignedUploadUrl>;
   /**
    * Verifies the object actually exists in the private bucket and
-   * returns the PROVIDER'S OWN observed size and content type, or
+   * returns the provider-recorded size and Content-Type metadata, or
    * null if the object is absent OR the provider did not record a
    * usable content type (fail closed -- see header comment).
    */
   verifyObjectExists(objectKey: string): Promise<VerifiedObjectMetadata | null>;
+  /**
+   * R2 (§4.2): deletes exactly one orphaned (never-completed) object
+   * from the private bucket. Narrowly scoped by design -- it takes
+   * only an object key, never a prefix or wildcard, so it cannot be
+   * used to delete more than the caller explicitly names. A "not
+   * found" response from the provider counts as success (the object
+   * is already gone, which is the desired end state) rather than a
+   * failure -- this is what makes cleanup safely re-runnable. This
+   * method must NEVER be called for a 'completed' reservation; the
+   * caller (scripts/ops/intake-ops.ts) enforces that by construction,
+   * only ever invoking this for rows already identified as orphaned.
+   */
+  deleteObject(objectKey: string): Promise<DeleteObjectResult>;
 }
 
 export function createLiveSupabaseStorageAdapter(): StorageAdapter {
@@ -80,18 +102,34 @@ export function createLiveSupabaseStorageAdapter(): StorageAdapter {
       if (typeof contentType !== 'string' || contentType.length === 0) return null;
       return { sizeBytes, contentType };
     },
+    async deleteObject(objectKey: string): Promise<DeleteObjectResult> {
+      const { error } = await client.storage.from(bucket).remove([objectKey]);
+      if (!error) return { success: true };
+      // Supabase Storage returns a 404-shaped error for an
+      // already-absent object -- treat that as success (idempotent),
+      // any other error as a real, retriable failure.
+      const status = (error as { statusCode?: string | number }).statusCode;
+      if (status === '404' || status === 404) return { success: true };
+      return { success: false };
+    },
   };
 }
 
 export function createFakeStorageAdapter(): StorageAdapter & {
   signedUrlCalls: string[];
   simulatedObjects: Map<string, VerifiedObjectMetadata>;
+  deleteCalls: string[];
+  simulatedDeleteFailures: Set<string>;
 } {
   const signedUrlCalls: string[] = [];
   const simulatedObjects = new Map<string, VerifiedObjectMetadata>();
+  const deleteCalls: string[] = [];
+  const simulatedDeleteFailures = new Set<string>();
   return {
     signedUrlCalls,
     simulatedObjects,
+    deleteCalls,
+    simulatedDeleteFailures,
     async createSignedUploadUrl(objectKey: string): Promise<SignedUploadUrl> {
       signedUrlCalls.push(objectKey);
       return {
@@ -102,6 +140,17 @@ export function createFakeStorageAdapter(): StorageAdapter & {
     },
     async verifyObjectExists(objectKey: string) {
       return simulatedObjects.get(objectKey) ?? null;
+    },
+    async deleteObject(objectKey: string): Promise<DeleteObjectResult> {
+      deleteCalls.push(objectKey);
+      if (simulatedDeleteFailures.has(objectKey)) {
+        return { success: false };
+      }
+      // Deleting an already-absent (or never-existed) object is a
+      // no-op success, matching the live adapter's "not found is
+      // idempotent success" contract.
+      simulatedObjects.delete(objectKey);
+      return { success: true };
     },
   };
 }

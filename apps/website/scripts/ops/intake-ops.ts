@@ -38,6 +38,8 @@ import * as uploadSessionsRepo from '../../src/lib/intake/repositories/upload-se
 import * as intakeFilesRepo from '../../src/lib/intake/repositories/intake-files.repository';
 import { finalizeIntakeRequest, type FinalizeAction } from '../../src/lib/intake/finalize.service';
 import { issueUploadSession, revokeUploadSession } from '../../src/lib/intake/upload-session.service';
+import { getStorageAdapter } from '../../src/lib/intake/adapters';
+import { recordEvent } from '../../src/lib/intake/repositories/intake-events.repository';
 import { fileURLToPath } from 'node:url';
 
 function log(message: string): void {
@@ -146,16 +148,42 @@ async function cmdCleanup(apply: boolean): Promise<void> {
 
   const orphans = await intakeFilesRepo.findOrphanReservations();
   log(`\n${orphans.length} orphaned file reservation(s) found (expired-still-reserved or failed).`);
+  // R2 (§4.2 item 7): only counts and reservation/session IDs in
+  // normal CLI output -- never the original filename or storage
+  // object key.
   for (const orphan of orphans) {
     log(`  ${orphan.reason}  reservation ${orphan.id}  session ${orphan.upload_session_id}`);
   }
-  if (apply && orphans.length > 0) {
-    const expired = await intakeFilesRepo.expireOrphanReservations();
-    log(`Marked ${expired.length} reservation(s) as expired. Completed customer files are never touched by this command.`);
-  }
 
   if (!apply) {
-    log('\nDry run only -- no rows were changed. Re-run with --apply to perform the update.');
+    log('\nDry run only -- no provider objects were deleted and no rows were changed. Re-run with --apply to perform the update.');
+    return;
+  }
+
+  let deleted = 0;
+  let retriable = 0;
+  const storage = getStorageAdapter();
+  for (const orphan of orphans) {
+    // R2 (§4.2 items 1-5): never delete a completed file (orphans by
+    // definition are 'reserved' or 'failed', never 'completed' --
+    // see findOrphanReservations); attempt provider deletion first;
+    // "not found" is treated as idempotent success by the adapter
+    // itself; only mark the row expired after that success; leave a
+    // failed deletion retriable (row untouched, will be found again
+    // by the next cleanup run).
+    const result = await storage.deleteObject(orphan.storage_object_key);
+    if (result.success) {
+      await intakeFilesRepo.markReservationExpired(orphan.id);
+      await recordEvent(orphan.request_id, 'upload.orphan_object_deleted');
+      deleted += 1;
+    } else {
+      await recordEvent(orphan.request_id, 'upload.orphan_object_delete_failed');
+      retriable += 1;
+    }
+  }
+  log(`Deleted ${deleted} orphaned provider object(s) and marked their reservation(s) expired.`);
+  if (retriable > 0) {
+    log(`${retriable} deletion(s) failed and remain retriable -- re-run cleanup --apply later to retry them.`);
   }
 }
 

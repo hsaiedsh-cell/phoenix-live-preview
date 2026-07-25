@@ -152,12 +152,43 @@ const DANGEROUS_DATA_KEYS = new Set([
   'cookie',
 ]);
 
-function scrubDataObject(data: Record<string, unknown>): Record<string, unknown> {
+// R3 (§5): a nested object under an otherwise-harmless key (e.g.
+// { context: { user: { email: '...' } } }) previously survived R2's
+// first-level-only scrubDataObject entirely. These bounds make the
+// recursive scrubber below safe against both unbounded depth (a
+// pathological or maliciously-crafted event) and unbounded breadth
+// (a huge array/object attached to an event).
+const MAX_SCRUB_DEPTH = 5;
+const MAX_SCRUB_COLLECTION_SIZE = 50;
+
+function scrubValue(value: unknown, depth: number): unknown {
+  if (depth > MAX_SCRUB_DEPTH) return '[redacted-max-depth]';
+  if (typeof value === 'string') return redactUploadTokenFromUrl(value);
+  if (Array.isArray(value)) {
+    return value.slice(0, MAX_SCRUB_COLLECTION_SIZE).map((entry) => scrubValue(entry, depth + 1));
+  }
+  if (value && typeof value === 'object') {
+    return scrubDataObject(value as Record<string, unknown>, depth + 1);
+  }
+  return value;
+}
+
+/**
+ * R3 (§5): recursively removes every DANGEROUS_DATA_KEYS key at
+ * EVERY nesting level (not just the top level), redacts token/
+ * object-key-shaped substrings in every string value at every level,
+ * and bounds both recursion depth and collection/object size. Used
+ * for breadcrumb data, span data, the allowed context's own value,
+ * and tags -- anywhere Sentry's auto-instrumentation could have
+ * attached arbitrarily-shaped, arbitrarily-deep data.
+ */
+function scrubDataObject(data: Record<string, unknown>, depth = 0): Record<string, unknown> {
+  if (depth > MAX_SCRUB_DEPTH) return {};
   const next: Record<string, unknown> = {};
-  for (const key of Object.keys(data)) {
+  const keys = Object.keys(data).slice(0, MAX_SCRUB_COLLECTION_SIZE);
+  for (const key of keys) {
     if (DANGEROUS_DATA_KEYS.has(key)) continue;
-    const value = data[key];
-    next[key] = typeof value === 'string' ? redactUploadTokenFromUrl(value) : value;
+    next[key] = scrubValue(data[key], depth + 1);
   }
   return next;
 }
@@ -211,13 +242,35 @@ export function sanitizeSentryEvent<T extends SentryErrorEvent | SentryTransacti
   delete cloned.extra;
 
   // R2 (§6): allowlist `contexts` down to a small known-safe set.
+  // R3 (§5): additionally recursively scrub the surviving value
+  // itself -- allowlisting the KEY "runtime" doesn't guarantee some
+  // integration hasn't attached unexpected nested data under it.
   if (cloned.contexts && typeof cloned.contexts === 'object') {
     const contexts = cloned.contexts as Record<string, unknown>;
     const allowed: Record<string, unknown> = {};
     for (const key of Object.keys(contexts)) {
-      if (ALLOWED_CONTEXTS_KEYS.has(key)) allowed[key] = contexts[key];
+      if (ALLOWED_CONTEXTS_KEYS.has(key)) {
+        const value = contexts[key];
+        allowed[key] = value && typeof value === 'object' ? scrubDataObject(value as Record<string, unknown>) : value;
+      }
     }
     cloned.contexts = allowed;
+  }
+
+  // R3 (§5): top-level raw `message` and `logentry` -- both can be
+  // populated by Sentry's auto-instrumentation on a captured
+  // console/log call or a message-only event, and neither goes
+  // through the exception-value redaction path above at all.
+  delete cloned.message;
+  delete cloned.logentry;
+
+  // R3 (§5): `tags` is a flat (but not necessarily shallow -- a tag
+  // value can itself be an object under some integrations) bag
+  // Sentry can auto-populate independently of the explicit,
+  // already-safe tags reportInternalError sets itself (requestId/
+  // route/errorCategory/etc.) -- scrub it the same recursive way.
+  if (cloned.tags && typeof cloned.tags === 'object' && !Array.isArray(cloned.tags)) {
+    cloned.tags = scrubDataObject(cloned.tags as Record<string, unknown>);
   }
 
   // R2 (§6): the raw exception message from an auto-instrumented

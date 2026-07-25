@@ -1,22 +1,28 @@
 // ============================================================
 // Phoenix Website — Intake Operations CLI
-// PHX-LAUNCH-001
+// PHX-LAUNCH-001 (R1: PHX-LAUNCH-001-R1 §5)
 // ------------------------------------------------------------
 // Manual CLI for Private Beta operations. Talks directly to the
 // repositories/services (not over HTTP), so it works whether or not
 // the Next.js server is running, and is the intended caller of the
 // internal-only finalize/upload-session HTTP routes' underlying
-// logic (this CLI is a superset — it can also list and inspect).
+// logic (this CLI is a superset -- it can also list and inspect).
+//
+// R1: `find` (and `list`) now print a REDACTED safe summary by
+// default -- never the customer message, email, phone, raw/hashed
+// IP, idempotency hash, upload token hash, storage object key, or
+// original filename. Pass --show-sensitive to `find` to see the
+// full row, which prints a loud terminal warning first.
 //
 // Never prints the raw upload token after initial issuance: the
 // invite command constructs and sends the /upload/<token> URL by
-// email only. Re-running `find` or `list` on that request afterward
-// shows only status and metadata — the raw token is not retrievable
-// from storage at all (only a hash is persisted).
+// email only. The raw token is not retrievable from storage at all
+// (only a hash is persisted) -- not even --show-sensitive can print
+// it, because it was never stored.
 //
 // Usage:
 //   npx tsx scripts/ops/intake-ops.ts list
-//   npx tsx scripts/ops/intake-ops.ts find <publicReference>
+//   npx tsx scripts/ops/intake-ops.ts find <publicReference> [--show-sensitive]
 //   npx tsx scripts/ops/intake-ops.ts review <publicReference>
 //   npx tsx scripts/ops/intake-ops.ts invite-upload <publicReference>
 //   npx tsx scripts/ops/intake-ops.ts revoke-upload <publicReference>
@@ -29,12 +35,48 @@
 
 import * as intakeRequestsRepo from '../../src/lib/intake/repositories/intake-requests.repository';
 import * as uploadSessionsRepo from '../../src/lib/intake/repositories/upload-sessions.repository';
+import * as intakeFilesRepo from '../../src/lib/intake/repositories/intake-files.repository';
 import { finalizeIntakeRequest, type FinalizeAction } from '../../src/lib/intake/finalize.service';
 import { issueUploadSession, revokeUploadSession } from '../../src/lib/intake/upload-session.service';
+import { fileURLToPath } from 'node:url';
 
 function log(message: string): void {
   // eslint-disable-next-line no-console
   console.log(message);
+}
+
+/**
+ * R1 (§5): the ONLY fields the default `find`/`list` output may
+ * contain. This type has no field for message/email/phone/IP
+ * hash/idempotency hash/token hash/object key/filename -- adding one
+ * of those to a caller would be a TypeScript error, not just a
+ * convention, since buildSafeSummary below is the sole place that
+ * constructs this type from a full row.
+ */
+export interface SafeRequestSummary {
+  publicReference: string;
+  status: string;
+  requestType: string;
+  company: string;
+  createdAt: string;
+  updatedAt: string;
+  fileCount: number;
+  uploadSessionStatus: string | null;
+}
+
+export async function buildSafeSummary(row: intakeRequestsRepo.IntakeRequestRow): Promise<SafeRequestSummary> {
+  const session = await uploadSessionsRepo.findActiveSessionForRequest(row.id);
+  const filesForSession = session ? await intakeFilesRepo.listFilesForSession(session.id) : [];
+  return {
+    publicReference: row.public_reference,
+    status: row.status,
+    requestType: row.request_type,
+    company: row.company,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    fileCount: filesForSession.length,
+    uploadSessionStatus: session?.status ?? null,
+  };
 }
 
 async function cmdList(): Promise<void> {
@@ -42,7 +84,7 @@ async function cmdList(): Promise<void> {
   for (const row of rows) {
     log(`${row.public_reference}  ${row.status.padEnd(15)}  ${row.request_type.padEnd(10)}  ${row.company}`);
   }
-  log(`\n${rows.length} request(s).`);
+  log(`\n${rows.length} request(s). (safe summary only -- use "find <reference>" for more, or "find <reference> --show-sensitive" for the full record)`);
 }
 
 async function requireRequest(publicReference: string) {
@@ -55,9 +97,20 @@ async function requireRequest(publicReference: string) {
   return row;
 }
 
-async function cmdFind(publicReference: string): Promise<void> {
+async function cmdFind(publicReference: string, showSensitive: boolean): Promise<void> {
   const row = await requireRequest(publicReference);
   if (!row) return;
+
+  if (!showSensitive) {
+    const summary = await buildSafeSummary(row);
+    log(JSON.stringify(summary, null, 2));
+    return;
+  }
+
+  log('');
+  log('!!! SENSITIVE VIEW -- includes customer message, email, phone, and internal hashes. !!!');
+  log('!!! Handle this output per the Operations Runbook; do not paste it into chat/tickets. !!!');
+  log('');
   log(JSON.stringify(row, null, 2));
 }
 
@@ -72,7 +125,7 @@ async function cmdInviteUpload(publicReference: string): Promise<void> {
   const row = await requireRequest(publicReference);
   if (!row) return;
   const outcome = await issueUploadSession(row.id);
-  // Deliberately never logs the raw token — only the outcome
+  // Deliberately never logs the raw token -- only the outcome
   // metadata (expiry, whether the email send succeeded).
   log(JSON.stringify(outcome, null, 2));
 }
@@ -90,8 +143,19 @@ async function cmdCleanup(apply: boolean): Promise<void> {
   for (const session of staleSessions) {
     log(`  session ${session.id} for request ${session.request_id}`);
   }
+
+  const orphans = await intakeFilesRepo.findOrphanReservations();
+  log(`\n${orphans.length} orphaned file reservation(s) found (expired-still-reserved or failed).`);
+  for (const orphan of orphans) {
+    log(`  ${orphan.reason}  reservation ${orphan.id}  session ${orphan.upload_session_id}`);
+  }
+  if (apply && orphans.length > 0) {
+    const expired = await intakeFilesRepo.expireOrphanReservations();
+    log(`Marked ${expired.length} reservation(s) as expired. Completed customer files are never touched by this command.`);
+  }
+
   if (!apply) {
-    log('\nDry run only — no rows were changed. Re-run with --apply to perform the update.');
+    log('\nDry run only -- no rows were changed. Re-run with --apply to perform the update.');
   }
 }
 
@@ -102,7 +166,7 @@ async function main(): Promise<void> {
     case 'list':
       return cmdList();
     case 'find':
-      return cmdFind(arg1);
+      return cmdFind(arg1, arg2 === '--show-sensitive');
     case 'review':
       return cmdFinalize(arg1, 'under_review');
     case 'invite-upload':
@@ -125,8 +189,14 @@ async function main(): Promise<void> {
   }
 }
 
-main().catch((error) => {
-  // eslint-disable-next-line no-console
-  console.error('intake-ops failed:', error instanceof Error ? error.message : error);
-  process.exitCode = 1;
-});
+// Only auto-run when executed directly as a script (e.g. `npx tsx
+// scripts/ops/intake-ops.ts ...`), never when imported as a module
+// by a QA script wanting to reuse buildSafeSummary/etc.
+const isDirectRun = process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1];
+if (isDirectRun) {
+  main().catch((error) => {
+    // eslint-disable-next-line no-console
+    console.error('intake-ops failed:', error instanceof Error ? error.message : error);
+    process.exitCode = 1;
+  });
+}

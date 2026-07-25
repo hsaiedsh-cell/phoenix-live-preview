@@ -14,7 +14,7 @@
 import { intakeQuery, type TransactionQuery } from '../db';
 import { UPLOAD_LIMITS } from '../config';
 
-export type ReservationStatus = 'reserved' | 'completed' | 'failed' | 'expired';
+export type ReservationStatus = 'reserved' | 'completed' | 'failed' | 'expired' | 'cancelled';
 
 export interface IntakeFileRow {
   id: string;
@@ -182,6 +182,25 @@ export async function countCompletedForSessionInTransaction(query: TransactionQu
 }
 
 /**
+ * R4 (§2.3): atomically transitions exactly one 'reserved' row to
+ * 'cancelled', releasing its quota. The `WHERE reservation_status =
+ * 'reserved'` clause is what makes "completed reservations can never
+ * be cancelled" and "duplicate cancellation is idempotent" both true
+ * at the database layer -- a second cancel attempt (or one racing a
+ * completion) simply matches zero rows.
+ */
+export async function cancelReservationInTransaction(query: TransactionQuery, reservationId: string): Promise<IntakeFileRow | null> {
+  const rows = await query<IntakeFileRow>(
+    `UPDATE public_intake_files
+       SET reservation_status = 'cancelled'
+       WHERE id = $1 AND reservation_status = 'reserved'
+       RETURNING *`,
+    [reservationId]
+  );
+  return rows[0] ?? null;
+}
+
+/**
  * Atomically transitions exactly one 'reserved' row to 'completed'.
  * The `WHERE reservation_status = 'reserved'` clause is what makes
  * "already-completed object cannot complete twice" true at the
@@ -218,25 +237,100 @@ export async function listFilesForSession(uploadSessionId: string): Promise<Inta
   );
 }
 
+/**
+ * R4 (§1): the authoritative-state summary GET /api/upload/:token
+ * returns. Deliberately narrow -- callers must never widen this to
+ * include request_id, storage_object_key is the only identifier
+ * exposed (already server-generated, opaque, and safe -- see
+ * object-key.ts), and no field here can be traced back to a
+ * database UUID, token hash, email, customer message, or IP hash.
+ * Counts/bytes are computed from 'reserved' and 'completed' rows
+ * only (never 'failed'/'expired'/'cancelled', which no longer
+ * consume quota).
+ */
+export interface PendingReservationSummary {
+  storageObjectKey: string;
+  originalFilename: string;
+  declaredContentType: string;
+  declaredSizeBytes: number;
+  reservationStatus: 'reserved';
+}
+
+export interface SessionStateSummary {
+  completedCount: number;
+  completedBytes: number;
+  reservedCount: number;
+  reservedBytes: number;
+  pendingReservations: PendingReservationSummary[];
+}
+
+export async function getSessionStateSummary(uploadSessionId: string): Promise<SessionStateSummary> {
+  const rows = await intakeQuery<{
+    storage_object_key: string;
+    original_filename: string;
+    declared_content_type: string;
+    declared_size_bytes: number;
+    reservation_status: ReservationStatus;
+  }>(
+    `SELECT storage_object_key, original_filename, declared_content_type, declared_size_bytes, reservation_status
+     FROM public_intake_files
+     WHERE upload_session_id = $1 AND reservation_status IN ('reserved', 'completed')
+     ORDER BY created_at ASC`,
+    [uploadSessionId]
+  );
+
+  let completedCount = 0;
+  let completedBytes = 0;
+  let reservedCount = 0;
+  let reservedBytes = 0;
+  const pendingReservations: PendingReservationSummary[] = [];
+
+  for (const row of rows) {
+    if (row.reservation_status === 'completed') {
+      completedCount += 1;
+      completedBytes += row.declared_size_bytes;
+    } else {
+      reservedCount += 1;
+      reservedBytes += row.declared_size_bytes;
+      pendingReservations.push({
+        storageObjectKey: row.storage_object_key,
+        originalFilename: row.original_filename,
+        declaredContentType: row.declared_content_type,
+        declaredSizeBytes: row.declared_size_bytes,
+        reservationStatus: 'reserved',
+      });
+    }
+  }
+
+  return { completedCount, completedBytes, reservedCount, reservedBytes, pendingReservations };
+}
+
 // ---- Orphan handling (PHX-LAUNCH-001-R1 §1.6) ----------------
 
 export interface OrphanReservationRow extends IntakeFileRow {
-  reason: 'expired_reserved' | 'failed';
+  reason: 'expired_reserved' | 'failed' | 'cancelled';
 }
 
 /**
  * Reservations that are still 'reserved' but whose parent upload
  * session has already expired (customer never completed the
- * upload), plus rows already marked 'failed'. Never includes
- * 'completed' rows -- completed customer files are never touched by
- * cleanup.
+ * upload), plus rows already marked 'failed' or 'cancelled' --
+ * cancellation (R4 §2.3) attempts a best-effort provider deletion at
+ * cancel time, but if that deletion failed, the row's provider
+ * object may still exist and must remain discoverable here so a
+ * later cleanup pass retries it. Never includes 'completed' rows --
+ * completed customer files are never touched by cleanup.
  */
 export async function findOrphanReservations(): Promise<OrphanReservationRow[]> {
   return intakeQuery<OrphanReservationRow>(
-    `SELECT f.*, CASE WHEN f.reservation_status = 'failed' THEN 'failed' ELSE 'expired_reserved' END AS reason
+    `SELECT f.*, CASE
+       WHEN f.reservation_status = 'failed' THEN 'failed'
+       WHEN f.reservation_status = 'cancelled' THEN 'cancelled'
+       ELSE 'expired_reserved'
+     END AS reason
      FROM public_intake_files f
      JOIN public_upload_sessions s ON s.id = f.upload_session_id
-     WHERE f.reservation_status = 'failed'
+     WHERE f.reservation_status IN ('failed', 'cancelled')
         OR (f.reservation_status = 'reserved' AND s.expires_at < now())
      ORDER BY f.created_at ASC`
   );
@@ -259,7 +353,7 @@ export async function markReservationExpired(reservationId: string): Promise<Int
   const rows = await intakeQuery<IntakeFileRow>(
     `UPDATE public_intake_files
        SET reservation_status = 'expired'
-       WHERE id = $1 AND reservation_status IN ('reserved', 'failed')
+       WHERE id = $1 AND reservation_status IN ('reserved', 'failed', 'cancelled')
        RETURNING *`,
     [reservationId]
   );

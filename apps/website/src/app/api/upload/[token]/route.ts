@@ -33,7 +33,21 @@ export async function GET(
     }
     logIntakeEvent({ requestId, route, outcome: 'ok', statusCode: 200 });
     return NextResponse.json(
-      { valid: true, maxFiles: outcome.maxFiles, expiresAt: outcome.expiresAt.toISOString(), requestId },
+      {
+        valid: true,
+        maxFiles: outcome.maxFiles,
+        maxFileSizeBytes: outcome.maxFileSizeBytes,
+        maxTotalSizeBytes: outcome.maxTotalSizeBytes,
+        completedCount: outcome.completedCount,
+        reservedCount: outcome.reservedCount,
+        reservedBytes: outcome.reservedBytes,
+        completedBytes: outcome.completedBytes,
+        remainingFileSlots: outcome.remainingFileSlots,
+        remainingBytes: outcome.remainingBytes,
+        expiresAt: outcome.expiresAt.toISOString(),
+        pendingReservations: outcome.pendingReservations,
+        requestId,
+      },
       { status: 200 }
     );
   } catch (error) {

@@ -59,6 +59,8 @@ export type IntakeEventType =
   | 'upload.finalization_rejected_zero_files'
   | 'upload.finalization_denied_request_state'
   | 'upload.session_finalized'
+  | 'upload.reservation_cancelled'
+  | 'upload.cancellation_denied'
   | 'upload.orphan_cleaned'
   | 'upload.orphan_object_deleted'
   | 'upload.orphan_object_delete_failed'

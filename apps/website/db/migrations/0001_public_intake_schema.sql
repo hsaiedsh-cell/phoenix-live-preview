@@ -271,6 +271,8 @@ CREATE TABLE public_intake_events (
     'upload.finalization_rejected_zero_files',
     'upload.finalization_denied_request_state',
     'upload.session_finalized',
+    'upload.reservation_cancelled',
+    'upload.cancellation_denied',
     'upload.orphan_cleaned',
     'upload.orphan_object_deleted',
     'upload.orphan_object_delete_failed',
@@ -405,7 +407,7 @@ CREATE TABLE public_intake_files (
   CONSTRAINT chk_intake_files_verified_size
     CHECK (verified_size_bytes IS NULL OR (verified_size_bytes > 0 AND verified_size_bytes <= 20971520)),
   CONSTRAINT chk_intake_files_reservation_status
-    CHECK (reservation_status IN ('reserved', 'completed', 'failed', 'expired')),
+    CHECK (reservation_status IN ('reserved', 'completed', 'failed', 'expired', 'cancelled')),
   CONSTRAINT chk_intake_files_scan_status
     CHECK (scan_status IN ('pending_review', 'cleared', 'quarantined')),
   CONSTRAINT chk_intake_files_original_filename_len

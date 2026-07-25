@@ -53,7 +53,9 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
   const idempotencyKeyRef = useRef(generateIdempotencyKey());
   const turnstileSiteKey = process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '';
   const turnstileWidgetRef = useRef<HTMLDivElement>(null);
+  const turnstileWidgetIdRef = useRef<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string>('');
+  const [turnstileError, setTurnstileError] = useState<string>('');
 
   useEffect(() => {
     setRequestType(initialRequestType);
@@ -62,15 +64,41 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
   useEffect(() => {
     if (!turnstileSiteKey) return;
     const w = window as unknown as {
-      turnstile?: { render: (el: HTMLElement, opts: Record<string, unknown>) => void };
+      turnstile?: {
+        render: (el: HTMLElement, opts: Record<string, unknown>) => string;
+        reset: (widgetId?: string) => void;
+      };
     };
     if (w.turnstile && turnstileWidgetRef.current) {
-      w.turnstile.render(turnstileWidgetRef.current, {
+      turnstileWidgetIdRef.current = w.turnstile.render(turnstileWidgetRef.current, {
         sitekey: turnstileSiteKey,
-        callback: (token: string) => setTurnstileToken(token),
+        callback: (token: string) => {
+          setTurnstileToken(token);
+          setTurnstileError('');
+        },
+        // R1 §2.5: client-side expired/error callbacks, so a stale
+        // or failed challenge is surfaced to the person immediately
+        // rather than silently submitting a dead token.
+        'expired-callback': () => {
+          setTurnstileToken('');
+          setTurnstileError('Verification expired — please complete it again.');
+        },
+        'error-callback': () => {
+          setTurnstileToken('');
+          setTurnstileError('Verification failed to load. Please refresh and try again.');
+        },
       });
     }
   }, [turnstileSiteKey]);
+
+  /** R1 §2.5: resets the Turnstile widget (forcing a fresh token) after the server reports a rejected/expired token. */
+  function resetTurnstile(): void {
+    setTurnstileToken('');
+    const w = window as unknown as { turnstile?: { reset: (widgetId?: string) => void } };
+    if (w.turnstile && turnstileWidgetIdRef.current) {
+      w.turnstile.reset(turnstileWidgetIdRef.current);
+    }
+  }
 
   const isSubmitting = state.status === 'submitting';
 
@@ -121,6 +149,13 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
       }
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
+        if (response.status === 400 || response.status === 503) {
+          // 400 = Turnstile rejected this token, 503 = Turnstile
+          // provider was unreachable -- either way the token is
+          // spent/unusable, so force a fresh challenge before the
+          // person can retry (PHX-LAUNCH-001-R1 §2.5).
+          resetTurnstile();
+        }
         setState({ status: 'error', message: body?.error || 'Something went wrong. Please try again.' });
         return;
       }
@@ -273,7 +308,14 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
       </div>
 
       {turnstileSiteKey ? (
-        <div ref={turnstileWidgetRef} />
+        <div>
+          <div ref={turnstileWidgetRef} />
+          {turnstileError && (
+            <p className="text-xs text-red-600 mt-2" role="alert">
+              {turnstileError}
+            </p>
+          )}
+        </div>
       ) : (
         <p className="text-xs text-amber-600">
           Bot verification is not configured in this environment (NEXT_PUBLIC_TURNSTILE_SITE_KEY unset).

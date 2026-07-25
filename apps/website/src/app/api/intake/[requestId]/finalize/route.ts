@@ -17,6 +17,7 @@ import {
   reportInternalError,
   readBoundedJsonBody,
   isValidOpsSecret,
+  requireJsonContentType,
 } from '@/lib/intake/http';
 
 export const runtime = 'nodejs';
@@ -29,6 +30,9 @@ export async function POST(
   const requestId = newRequestId();
   const route = 'POST /api/intake/[requestId]/finalize';
 
+  if (!requireJsonContentType(request)) {
+    return genericErrorResponse(415, 'Unsupported Media Type.', requestId);
+  }
   if (!isValidOpsSecret(request)) {
     logIntakeEvent({ requestId, route, outcome: 'ops_secret_invalid', statusCode: 401 });
     return genericErrorResponse(401, 'Unauthorized.', requestId);

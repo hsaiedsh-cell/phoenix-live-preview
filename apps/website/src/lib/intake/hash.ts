@@ -38,6 +38,21 @@ export function idempotencyKeyHash(idempotencyKey: string, secret?: string): str
 }
 
 /**
+ * R1 (§2.1): binds idempotent replay to a fingerprint of the "safe
+ * matching fields" — normalized email + request type — so the same
+ * client-supplied idempotency key cannot be replayed against a
+ * materially different submission. Deliberately narrow (not a hash
+ * of the whole payload): message/company/etc. are allowed to be
+ * corrected in a legitimate retry within the same 15-minute window
+ * without being treated as a conflicting payload, matching how a
+ * real client-side retry actually behaves (same key, same intent,
+ * possibly a resubmit after fixing an unrelated field).
+ */
+export function payloadFingerprint(normalizedEmail: string, requestType: string, secret?: string): string {
+  return hmacHash(`${normalizedEmail}::${requestType}`, secret);
+}
+
+/**
  * Generates a cryptographically random, non-sequential raw upload
  * token. Only its SHA-256 hash (see tokenHash) is ever persisted;
  * the raw value exists only transiently to build the one-time

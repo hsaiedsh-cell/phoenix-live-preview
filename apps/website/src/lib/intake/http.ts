@@ -1,6 +1,6 @@
 // ============================================================
-// Intake HTTP helpers — server-only
-// PHX-LAUNCH-001
+// Intake HTTP helpers -- server-only
+// PHX-LAUNCH-001 (R1: PHX-LAUNCH-001-R1 §2.4, §3.1)
 // ------------------------------------------------------------
 // Every route handler uses these helpers so that:
 //   - public error bodies are always generic (no stack traces, no
@@ -9,7 +9,10 @@
 //   - a request ID is always attached, both to the client response
 //     and to the structured server-side log line and to any
 //     monitoring capture, so an operator can correlate the two;
-//   - request bodies are never allowed to exceed MAX_REQUEST_BODY_BYTES.
+//   - request bodies are never allowed to exceed MAX_REQUEST_BODY_BYTES;
+//   - R1: the raw exception object is NEVER forwarded to monitoring
+//     or logged verbatim -- only a safe internal error code derived
+//     from its constructor name.
 // ============================================================
 
 import { randomUUID } from 'node:crypto';
@@ -17,7 +20,7 @@ import { NextResponse } from 'next/server';
 import { MAX_REQUEST_BODY_BYTES } from './schema';
 import { getMonitoringAdapter } from './adapters';
 import { scrubContext, type ErrorCategory } from './adapters/monitoring.adapter';
-import { serverConfig } from './config';
+import { serverConfig, publicConfig } from './config';
 
 export function newRequestId(): string {
   return randomUUID();
@@ -35,8 +38,8 @@ export function genericErrorResponse(status: number, message: string, requestId:
 
 /**
  * Structured, privacy-safe server-side log line. Deliberately takes
- * only a closed set of primitive fields — there is no `...rest`
- * passthrough — so a future caller cannot accidentally log a
+ * only a closed set of primitive fields -- there is no `...rest`
+ * passthrough -- so a future caller cannot accidentally log a
  * message body, email, token, or filename through this function.
  */
 export function logIntakeEvent(fields: {
@@ -60,20 +63,52 @@ export function logIntakeEvent(fields: {
   );
 }
 
+/**
+ * R1 (§3.1): a coarse, STABLE code derived only from the error's
+ * constructor name -- never from its message, which may contain
+ * database detail, provider responses, file paths, or other
+ * request-specific data. This is the only representation of an
+ * exception that ever reaches monitoring or the console in the
+ * production path.
+ */
+export function safeInternalErrorCode(error: unknown): string {
+  if (error instanceof Error) {
+    const name = error.constructor?.name || error.name || 'Error';
+    return name.replace(/[^a-zA-Z0-9_]/g, '').slice(0, 64) || 'Error';
+  }
+  return 'UnknownError';
+}
+
+/**
+ * A deliberately minimal Error subclass whose message IS the safe
+ * code and nothing else. This is the "explicitly proven sanitized
+ * representation" (PHX-LAUNCH-001-R1 §3.1) passed to the monitoring
+ * adapter -- never the original exception.
+ */
+export class SanitizedInternalError extends Error {
+  constructor(safeCode: string) {
+    super(safeCode);
+    this.name = 'SanitizedInternalError';
+  }
+}
+
 export function reportInternalError(
   error: unknown,
-  context: { requestId: string; route: string; errorCategory: ErrorCategory; publicReference?: string }
+  context: { requestId: string; route: string; errorCategory: ErrorCategory; statusCode?: number; publicReference?: string }
 ): void {
-  const scrubbed = scrubContext({ ...context });
-  getMonitoringAdapter().captureError(error, scrubbed);
-  // eslint-disable-next-line no-console -- structured server log; error.message only, never full request body
+  const safeCode = safeInternalErrorCode(error);
+  const scrubbed = scrubContext({ ...context, safeErrorCode: safeCode });
+  const sanitized = new SanitizedInternalError(safeCode);
+  getMonitoringAdapter().captureError(sanitized, scrubbed);
+  // eslint-disable-next-line no-console -- structured server log; safeErrorCode only, NEVER error.message or a stack
   console.error(
     JSON.stringify({
       level: 'error',
       requestId: context.requestId,
       route: context.route,
       errorCategory: context.errorCategory,
-      message: error instanceof Error ? error.message : 'unknown_error',
+      safeErrorCode: safeCode,
+      statusCode: context.statusCode,
       ts: new Date().toISOString(),
     })
   );
@@ -97,9 +132,64 @@ export async function readBoundedJsonBody(request: Request): Promise<{ ok: true;
 }
 
 /**
+ * R1 (§2.4): every JSON POST route requires Content-Type:
+ * application/json (ignoring charset/other parameters). Anything
+ * else -- missing header, multipart/form-data, text/plain, etc. --
+ * must be rejected with 415 before the body is even read.
+ */
+export function requireJsonContentType(request: Request): boolean {
+  const contentType = request.headers.get('content-type') || '';
+  return contentType.split(';')[0].trim().toLowerCase() === 'application/json';
+}
+
+/**
+ * R1 (§2.4): rejects a request that Chrome/Edge/Firefox itself has
+ * labeled cross-site via the Sec-Fetch-Site header. This header is
+ * set by the BROWSER, not readable/forgeable by page JavaScript, so
+ * it is a reliable (if not exhaustive -- older browsers and non-
+ * browser HTTP clients simply omit it) signal that a request
+ * originated from a page on a different site than this one and is
+ * therefore not a legitimate same-site form/fetch submission.
+ * Requests with no Sec-Fetch-Site header at all (e.g. curl, the ops
+ * CLI hitting the two internal routes, legitimate non-browser
+ * clients) are NOT blocked by this check alone -- there are no
+ * server-side provider callbacks in this sprint that would need an
+ * explicit exemption (PHX-LAUNCH-001-R1 §2.4).
+ */
+export function isCrossSiteBrowserRequest(request: Request): boolean {
+  return request.headers.get('sec-fetch-site') === 'cross-site';
+}
+
+/**
+ * R1 (§2.4): when an Origin header is present (same-origin fetch()
+ * calls and cross-origin browser requests both send one; simple
+ * top-level navigations and non-browser clients typically do not),
+ * it must match either this deployment's own site origin or the
+ * documented Vercel Preview origin pattern
+ * (https://<project>-<hash>-<team>.vercel.app). A present-but-
+ * mismatched Origin is rejected; an ABSENT Origin is not rejected by
+ * this check (that case is what isCrossSiteBrowserRequest and the
+ * rest of the anti-abuse stack are for).
+ */
+export function isOriginAllowed(request: Request): boolean {
+  const origin = request.headers.get('origin');
+  if (!origin) return true; // no Origin header present -- not this check's concern
+  try {
+    const originHost = new URL(origin).host;
+    const siteHost = new URL(publicConfig.siteUrl).host;
+    if (originHost === siteHost) return true;
+    // Vercel Preview deployments: https://<project>-<git-hash-or-branch>-<team>.vercel.app
+    if (/^[a-z0-9-]+\.vercel\.app$/i.test(originHost)) return true;
+    return false;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Internal-only routes (finalize, upload-session issuance) require
  * this header to match INTAKE_OPS_SECRET. These routes are never
- * called from browser code — only from the operations CLI — so a
+ * called from browser code -- only from the operations CLI -- so a
  * constant-time comparison against a shared secret is the intended
  * (minimum-viable, no-new-admin-UI) protection for this sprint.
  */
@@ -115,8 +205,26 @@ export function isValidOpsSecret(request: Request): boolean {
   return diff === 0;
 }
 
-/** Extracts the client IP from standard proxy headers, without ever persisting the raw value. */
+/**
+ * R1 (§2.4): trusted-proxy documentation for client-IP extraction.
+ *
+ * In the Vercel runtime this deployment targets, `x-vercel-forwarded-for`
+ * is set by Vercel's own edge network (not attacker-controllable by a
+ * direct client, since Vercel overwrites/sets it at the edge before
+ * the request reaches this function) and is preferred first. The
+ * generic `x-forwarded-for` is used as a fallback for local
+ * development and any other trusted reverse proxy in front of this
+ * app; ONLY the first (leftmost) address in that header is trusted,
+ * since a proxy appends the observed client address at that
+ * position and everything to its right may be attacker-supplied.
+ * `x-real-ip` is a last-resort fallback for simple proxies that set
+ * only that header. If this app is ever deployed behind a DIFFERENT
+ * proxy/CDN, this function must be revisited -- trusting the wrong
+ * header lets a client spoof its own rate-limit identity.
+ */
 export function extractClientIp(request: Request): string | null {
+  const vercelForwardedFor = request.headers.get('x-vercel-forwarded-for');
+  if (vercelForwardedFor) return vercelForwardedFor.split(',')[0].trim();
   const forwardedFor = request.headers.get('x-forwarded-for');
   if (forwardedFor) return forwardedFor.split(',')[0].trim();
   const realIp = request.headers.get('x-real-ip');

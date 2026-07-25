@@ -24,10 +24,13 @@ export type TurnstileVerificationResult =
   | { success: false; reason: 'invalid_token' | 'provider_error' };
 
 const VERIFY_URL = 'https://challenges.cloudflare.com/turnstile/v0/siteverify';
+const VERIFY_TIMEOUT_MS = 5000;
 
 export function createLiveTurnstileVerifier(): TurnstileVerifier {
   return {
     async verify(token: string, remoteIp?: string): Promise<TurnstileVerificationResult> {
+      const controller = new AbortController();
+      const timeout = setTimeout(() => controller.abort(), VERIFY_TIMEOUT_MS);
       try {
         const body = new URLSearchParams({
           secret: serverConfig.turnstileSecretKey,
@@ -39,6 +42,7 @@ export function createLiveTurnstileVerifier(): TurnstileVerifier {
           method: 'POST',
           headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
           body,
+          signal: controller.signal,
         });
 
         if (!response.ok) {
@@ -48,10 +52,15 @@ export function createLiveTurnstileVerifier(): TurnstileVerifier {
         const data = (await response.json()) as { success?: boolean };
         return data.success ? { success: true } : { success: false, reason: 'invalid_token' };
       } catch {
-        // Network failure, timeout, malformed JSON, etc. — treated as
-        // a distinguishable provider failure, never as "invalid
-        // token", so operators can tell the two apart in events.
+        // Network failure, timeout (AbortController fires here too),
+        // or malformed JSON -- treated as a distinguishable provider
+        // failure, never as "invalid token", so operators can tell
+        // the two apart in events. The server fails CLOSED either
+        // way: neither outcome results in the submission being
+        // accepted (PHX-LAUNCH-001-R1 §2.5).
         return { success: false, reason: 'provider_error' };
+      } finally {
+        clearTimeout(timeout);
       }
     },
   };

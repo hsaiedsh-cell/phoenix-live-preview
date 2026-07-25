@@ -171,19 +171,60 @@ export function isCrossSiteBrowserRequest(request: Request): boolean {
  * this check (that case is what isCrossSiteBrowserRequest and the
  * rest of the anti-abuse stack are for).
  */
+/**
+ * R3 (§6): parses ALLOWED_PREVIEW_ORIGINS (a comma-separated list of
+ * exact origins, e.g.
+ * "https://phoenix-preview-abc123-team.vercel.app,https://phoenix-staging.vercel.app")
+ * into a list of valid, parseable origin strings. A malformed entry
+ * (not a valid absolute URL) is silently DROPPED, not partially
+ * matched or treated as a wildcard -- a configuration mistake must
+ * fail closed (that one entry simply never matches anything) rather
+ * than accidentally widen what is allowed. No origin value from this
+ * list, or from the incoming request, is ever logged.
+ */
+function getAllowedPreviewOrigins(): string[] {
+  const raw = process.env.ALLOWED_PREVIEW_ORIGINS || '';
+  const allowed: string[] = [];
+  for (const entry of raw.split(',')) {
+    const trimmed = entry.trim();
+    if (!trimmed) continue;
+    try {
+      allowed.push(new URL(trimmed).origin);
+    } catch {
+      // Malformed configured origin -- dropped, fails closed.
+    }
+  }
+  return allowed;
+}
+
+/**
+ * R3 (§6): when an Origin header is present, it must match either
+ * this deployment's own site origin (NEXT_PUBLIC_SITE_URL) or one of
+ * the EXACT origins configured in ALLOWED_PREVIEW_ORIGINS -- there is
+ * no wildcard match against `*.vercel.app` anymore (R2's version of
+ * this function allowed every Vercel project's preview URL, not only
+ * this project's own, which was broader than the documented policy).
+ * A present-but-mismatched or malformed Origin is rejected; an ABSENT
+ * Origin is not rejected by this check (that case is what
+ * isCrossSiteBrowserRequest and the rest of the anti-abuse stack are
+ * for).
+ */
 export function isOriginAllowed(request: Request): boolean {
   const origin = request.headers.get('origin');
   if (!origin) return true; // no Origin header present -- not this check's concern
+  let originValue: string;
   try {
-    const originHost = new URL(origin).host;
-    const siteHost = new URL(publicConfig.siteUrl).host;
-    if (originHost === siteHost) return true;
-    // Vercel Preview deployments: https://<project>-<git-hash-or-branch>-<team>.vercel.app
-    if (/^[a-z0-9-]+\.vercel\.app$/i.test(originHost)) return true;
-    return false;
+    originValue = new URL(origin).origin;
   } catch {
-    return false;
+    return false; // malformed Origin header -- fail closed
   }
+  try {
+    if (originValue === new URL(publicConfig.siteUrl).origin) return true;
+  } catch {
+    // publicConfig.siteUrl itself malformed -- fall through to the
+    // preview-origin check rather than throwing.
+  }
+  return getAllowedPreviewOrigins().includes(originValue);
 }
 
 /**

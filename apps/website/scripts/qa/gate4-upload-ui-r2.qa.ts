@@ -49,7 +49,7 @@ async function main() {
     const expr = canFinishMatch[1];
     assert(expr.includes('!finalized'), 'canFinish requires the session not already be finalized');
     assert(expr.includes('completedCount > 0'), 'canFinish requires at least one completed file');
-    assert(expr.includes('!anyUploading'), 'canFinish requires nothing currently uploading');
+    assert(expr.includes('!anyBusy'), 'canFinish requires nothing currently busy (signing/uploading/verifying) -- R4 renamed this from anyUploading to anyBusy to cover the new verify phase too');
   }
   assert(source.includes('disabled={!canFinish}'), 'the Finish button is actually wired to the canFinish computation via its disabled prop');
 
@@ -76,13 +76,13 @@ async function main() {
 
   section('9. R2 §3.2 item 9: after successful finalization, file selection and all upload actions are disabled');
   assert(/\{!finalized && \(\s*<input/.test(source), 'the file picker <input> is only rendered when NOT finalized');
-  assert(/status === 'pending' && !finalized/.test(source), 'the per-entry Upload button is only rendered for pending entries when NOT finalized');
+  assert(/entry\.phase === 'pending' && !finalized/.test(source), 'the per-entry Upload button is only rendered for pending-phase entries when NOT finalized -- R4 renamed the per-entry field from status to phase');
 
   section('10. R2 §3.2 item 10: completed count and remaining allowance are displayed from server state');
   assert(source.includes('completedCount'), 'a completedCount piece of state exists');
   assert(source.includes('setCompletedCount(completeBody.fileCount)'), 'completedCount is set from the server\'s completion response, not from counting local entries');
   assert(source.includes('setCompletedCount(body.fileCount)'), 'completedCount is also updated from the finish response');
-  assert(/remaining = Math\.max\(0, tokenState\.maxFiles - completedCount\)/.test(source), 'remaining allowance is derived from maxFiles minus the server-sourced completedCount');
+  assert(/remainingFileSlots \?\? tokenState\.maxFiles/.test(source), 'remaining allowance is derived from server-sourced remainingFileSlots state (R4: fetched directly from the GET token-state response, not computed client-side from maxFiles - completedCount)');
 
   printSummaryAndExit();
 }

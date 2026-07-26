@@ -52,6 +52,11 @@ import { isDangerousExtension, isExtensionCompatibleWithMimeType } from './exten
 export type TokenCheckOutcome =
   | { kind: 'denied'; reason: 'invalid' | 'expired' | 'revoked' | 'used' }
   | {
+      kind: 'finalized';
+      completedCount: number;
+      finalizedAt: Date;
+    }
+  | {
       kind: 'ok';
       maxFiles: number;
       maxFileSizeBytes: number;
@@ -66,13 +71,31 @@ export type TokenCheckOutcome =
       pendingReservations: intakeFilesRepo.PendingReservationSummary[];
     };
 
-/** R4 (§1): the full, authoritative, privacy-safe token-state contract. Never logs any of the returned values. */
+/**
+ * R4 (§1): the full, authoritative, privacy-safe token-state contract.
+ * R7 (§4): a token matching a session already finalized by THIS
+ * upload workflow (status='used', finalized_at set) no longer falls
+ * through to the generic invalid-link denial -- it returns a minimal
+ * finalized receipt instead, so a customer whose "Finish" response
+ * was lost can still confirm Phoenix received their files. The
+ * receipt deliberately carries only completedCount and finalizedAt --
+ * never pendingReservations, filenames, storage object keys, the
+ * database request UUID, or any other customer data. It does not make
+ * the token reusable for any mutation (sign/complete/cancel/finish
+ * all continue to deny a used session exactly as before, except for
+ * their own specific idempotent-replay cases -- see completeUploadObject
+ * and finishUploadSession). Never logs any of the returned values.
+ */
 export async function checkUploadToken(rawToken: string): Promise<TokenCheckOutcome> {
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
   const validity = uploadSessionsRepo.evaluateTokenValidity(session);
 
   if (!validity.valid) {
+    if (validity.reason === 'used' && session && session.finalized_at !== null) {
+      const completedCount = await intakeFilesRepo.countCompletedForSession(session.id);
+      return { kind: 'finalized', completedCount, finalizedAt: session.finalized_at };
+    }
     const eventByReason = {
       invalid: 'upload.token_denied_invalid',
       expired: 'upload.token_denied_expired',
@@ -268,7 +291,7 @@ export type CompleteUploadOutcome =
         | 'extension_mismatch'
         | 'session_revalidation_failed';
     }
-  | { kind: 'ok'; fileCount: number; finalized: boolean }
+  | { kind: 'ok'; fileCount: number; finalized: boolean; replayed: boolean }
   | { kind: 'pending_reservations'; fileCount: number; reservedCount: number };
 
 /**
@@ -364,7 +387,28 @@ export async function completeUploadObject(
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
   const validity = uploadSessionsRepo.evaluateTokenValidity(session);
+
   if (!validity.valid) {
+    // R7 (§2): a session already finalized ('used') by THIS upload
+    // workflow may still represent a legitimate idempotent replay --
+    // if the exact object key the caller is retrying belongs to this
+    // session/request and is already 'completed', return the
+    // finalized idempotent receipt rather than a hard denial. Any
+    // other reason (invalid/expired/revoked), or a 'used' session
+    // whose object key does NOT match an already-completed
+    // reservation under it, is denied exactly as before.
+    if (validity.reason === 'used' && session) {
+      const reservation = await intakeFilesRepo.findReservationByObjectKey(input.storageObjectKey);
+      if (
+        reservation &&
+        reservation.upload_session_id === session.id &&
+        reservation.request_id === session.request_id &&
+        reservation.reservation_status === 'completed'
+      ) {
+        const fileCount = await intakeFilesRepo.countCompletedForSession(session.id);
+        return { kind: 'ok', fileCount, finalized: true, replayed: true };
+      }
+    }
     return { kind: 'denied', reason: validity.reason };
   }
 
@@ -376,6 +420,16 @@ export async function completeUploadObject(
   if (reservation.upload_session_id !== validity.session.id || reservation.request_id !== validity.session.request_id) {
     await recordPostCommitEvent(validity.session.request_id, 'upload.completion_denied_foreign_session', { route: 'completeUploadObject' });
     return { kind: 'completion_denied', reason: 'foreign_session' };
+  }
+
+  // R7 (§2): the session is still 'active' -- an "active-session
+  // replay". If this exact object key is already 'completed', return
+  // an idempotent success WITHOUT calling provider verification
+  // again, WITHOUT writing upload.completion_verified again, and
+  // WITHOUT sending any email again.
+  if (reservation.reservation_status === 'completed') {
+    const fileCount = await intakeFilesRepo.countCompletedForSession(validity.session.id);
+    return { kind: 'ok', fileCount, finalized: false, replayed: true };
   }
 
   const verified = await getStorageAdapter().verifyObjectExists(input.storageObjectKey);
@@ -440,21 +494,36 @@ export async function completeUploadObject(
           result.finalization.completedCount
         );
       }
-      return { kind: 'ok', fileCount: result.finalization.completedCount, finalized: result.finalization.kind === 'finalized' };
+      return { kind: 'ok', fileCount: result.finalization.completedCount, finalized: result.finalization.kind === 'finalized', replayed: false };
     }
   }
 }
 
 export type FinishUploadSessionOutcome =
-  | { ok: true; fileCount: number }
+  | { ok: true; fileCount: number; alreadyFinalized: boolean }
   | { ok: false; fileCount: number; reason?: 'pending_reservations'; reservedCount?: number };
 
-/** Explicit customer "I'm done uploading" action. R5 (§3): refuses while any reservation is still 'reserved'. */
+/**
+ * Explicit customer "I'm done uploading" action. R5 (§3): refuses
+ * while any reservation is still 'reserved'. R7 (§3): a token whose
+ * session was already finalized by THIS exact call (status='used',
+ * finalized_at set) now returns an idempotent already-finalized
+ * success receipt instead of a hard failure -- if the original
+ * Finish response was lost, the customer can retry and still learn
+ * their files were received, without any state transition, event, or
+ * email happening a second time.
+ */
 export async function finishUploadSession(rawToken: string): Promise<FinishUploadSessionOutcome> {
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
   const validity = uploadSessionsRepo.evaluateTokenValidity(session);
-  if (!validity.valid) return { ok: false, fileCount: 0 };
+  if (!validity.valid) {
+    if (validity.reason === 'used' && session && session.finalized_at !== null) {
+      const fileCount = await intakeFilesRepo.countCompletedForSession(session.id);
+      return { ok: true, fileCount, alreadyFinalized: true };
+    }
+    return { ok: false, fileCount: 0 };
+  }
 
   const result = await withIntakeTransaction(async (query) => {
     const lockedSession = await uploadSessionsRepo.lockSessionForUpdate(query, validity.session.id);
@@ -475,7 +544,7 @@ export async function finishUploadSession(rawToken: string): Promise<FinishUploa
       result.finalization.publicReference,
       result.finalization.completedCount
     );
-    return { ok: true, fileCount: result.finalization.completedCount };
+    return { ok: true, fileCount: result.finalization.completedCount, alreadyFinalized: false };
   }
   return { ok: false, fileCount: result.kind === 'ok' && result.finalization.kind === 'not_finalized' ? result.finalization.completedCount : 0 };
 }

@@ -120,16 +120,19 @@ export function createFakeStorageAdapter(): StorageAdapter & {
   simulatedObjects: Map<string, VerifiedObjectMetadata>;
   deleteCalls: string[];
   simulatedDeleteFailures: Set<string>;
+  verifyObjectExistsCalls: string[];
 } {
   const signedUrlCalls: string[] = [];
   const simulatedObjects = new Map<string, VerifiedObjectMetadata>();
   const deleteCalls: string[] = [];
   const simulatedDeleteFailures = new Set<string>();
+  const verifyObjectExistsCalls: string[] = [];
   return {
     signedUrlCalls,
     simulatedObjects,
     deleteCalls,
     simulatedDeleteFailures,
+    verifyObjectExistsCalls,
     async createSignedUploadUrl(objectKey: string): Promise<SignedUploadUrl> {
       signedUrlCalls.push(objectKey);
       const fakeToken = `fake-token-${signedUrlCalls.length}`;
@@ -146,6 +149,9 @@ export function createFakeStorageAdapter(): StorageAdapter & {
       };
     },
     async verifyObjectExists(objectKey: string) {
+      // R7: tracked so QA can prove an idempotent completion replay
+      // (§2) never calls this a second time for the same object key.
+      verifyObjectExistsCalls.push(objectKey);
       return simulatedObjects.get(objectKey) ?? null;
     },
     async deleteObject(objectKey: string): Promise<DeleteObjectResult> {

@@ -61,8 +61,8 @@ export async function POST(
       logIntakeEvent({ requestId, route, outcome: 'not_finalized', statusCode: 422 });
       return genericErrorResponse(422, 'Could not finish this upload session. Please make sure at least one file has completed.', requestId);
     }
-    logIntakeEvent({ requestId, route, outcome: 'finalized', statusCode: 200 });
-    return NextResponse.json({ finalized: true, fileCount: outcome.fileCount, requestId }, { status: 200 });
+    logIntakeEvent({ requestId, route, outcome: outcome.alreadyFinalized ? 'already_finalized' : 'finalized', statusCode: 200 });
+    return NextResponse.json({ finalized: true, alreadyFinalized: outcome.alreadyFinalized, fileCount: outcome.fileCount, requestId }, { status: 200 });
   } catch (error) {
     reportInternalError(error, { requestId, route, errorCategory: 'upload_completion' });
     return genericErrorResponse(500, 'Something went wrong.', requestId);

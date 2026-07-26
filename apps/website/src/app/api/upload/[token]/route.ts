@@ -31,9 +31,27 @@ export async function GET(
       // from "this token existed but was already used".
       return genericErrorResponse(404, 'This upload link is not valid.', requestId);
     }
+    if (outcome.kind === 'finalized') {
+      // R7 (§4): a minimal receipt for a token whose session has
+      // already been finalized by this workflow -- deliberately
+      // excludes pendingReservations, filenames, storage object keys,
+      // the database request UUID, and any other customer data. This
+      // does not make the token reusable for any mutation.
+      logIntakeEvent({ requestId, route, outcome: 'finalized', statusCode: 200 });
+      return NextResponse.json(
+        {
+          state: 'finalized',
+          completedCount: outcome.completedCount,
+          finalizedAt: outcome.finalizedAt.toISOString(),
+          requestId,
+        },
+        { status: 200 }
+      );
+    }
     logIntakeEvent({ requestId, route, outcome: 'ok', statusCode: 200 });
     return NextResponse.json(
       {
+        state: 'active',
         valid: true,
         maxFiles: outcome.maxFiles,
         maxFileSizeBytes: outcome.maxFileSizeBytes,

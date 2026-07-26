@@ -62,8 +62,8 @@ export async function POST(
           { status: 409 }
         );
       case 'ok':
-        logIntakeEvent({ requestId, route, outcome: 'ok', statusCode: 200 });
-        return NextResponse.json({ fileCount: outcome.fileCount, finalized: outcome.finalized, requestId }, { status: 200 });
+        logIntakeEvent({ requestId, route, outcome: outcome.replayed ? 'ok_replayed' : 'ok', statusCode: 200 });
+        return NextResponse.json({ fileCount: outcome.fileCount, finalized: outcome.finalized, replayed: outcome.replayed, requestId }, { status: 200 });
     }
   } catch (error) {
     reportInternalError(error, { requestId, route, errorCategory: 'upload_completion' });

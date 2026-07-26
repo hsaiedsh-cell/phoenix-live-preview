@@ -2,62 +2,42 @@
 
 // ============================================================
 // UploadClient — invitation-only private upload UI
-// PHX-LAUNCH-001 (R4: PHX-LAUNCH-001-R4 §1, §2)
+// PHX-LAUNCH-001 (R5: PHX-LAUNCH-001-R5 §3 UI, §4, §5, §6 client half)
 // ------------------------------------------------------------
-// R4 correction summary:
-//  - §1: the initial GET /api/upload/:token response now carries the
-//    full authoritative state contract (completed/reserved counts and
-//    bytes, remaining slots/bytes, and any pending reservations). The
-//    UI initializes completedCount/remaining from THAT response, not
-//    from a locally-assumed zero -- so after a page reload, a
-//    customer who already completed a file can click "Finish
-//    uploading" immediately, and existing in-flight reservations
-//    reappear as recoverable entries instead of vanishing.
-//  - §2: every file entry now tracks storageObjectKey,
-//    signedUploadUrl, declaredSizeBytes, declaredContentType, and an
-//    explicit `phase` (pending/signing/signed/uploading/
-//    uploaded_unverified/verifying/completed/rejected/
-//    recoverable_error/cancelled). A failed/ambiguous PUT or a failed
-//    completion call preserves the reservation and offers Retry
-//    (reusing the SAME signed URL/object key -- never re-signing,
-//    which would consume additional quota) rather than silently
-//    losing it. A new explicit Cancel action (POST
-//    /api/upload/:token/cancel) releases a still-reserved file's
-//    quota entirely, including for reservations recovered after a
-//    reload (which have no locally-known signedUploadUrl to retry a
-//    PUT with, only enough state to verify-or-cancel).
+// R5 correction summary:
+//  - §4: every entry has a stable, client-generated clientEntryId
+//    (see upload-client-state.ts), used for the React key, the
+//    in-flight guard, and every update/remove/sign/upload/verify/
+//    cancel/retry target. The mutable array index is never used as
+//    an asynchronous identity -- removing entry A while entry B is
+//    still uploading can no longer cause B's eventual completion to
+//    update the wrong entry (or silently miss a since-shifted index).
+//  - §5: a single refreshUploadState() function is the ONLY place
+//    that updates completedCount/reservedCount/*Bytes/remaining*/
+//    pendingReservations/expiresAt from the server, called after
+//    every sign/completion/cancellation (success, failure, or
+//    ambiguous-but-recoverable outcome). A monotonic sequence guard
+//    discards a stale, out-of-order response rather than letting it
+//    overwrite newer state. A failed refresh shows a recoverable
+//    message and never guesses a quota value.
+//  - §6 (client half): each entry generates its OWN reservationKey
+//    once, at creation, and reuses it verbatim for every sign retry
+//    -- never regenerated, so a lost-response retry reuses the exact
+//    same server-side reservation instead of creating a second one.
 // ============================================================
 
 import { useEffect, useRef, useState } from 'react';
+import {
+  type FileEntry,
+  updateEntryById,
+  removeEntryById,
+  findEntryById,
+  canFinish as computeCanFinish,
+  anyEntryBusy,
+} from './upload-client-state';
 
 interface UploadClientProps {
   token: string;
-}
-
-type EntryPhase =
-  | 'pending'
-  | 'signing'
-  | 'signed'
-  | 'uploading'
-  | 'uploaded_unverified'
-  | 'verifying'
-  | 'completed'
-  | 'rejected'
-  | 'recoverable_error'
-  | 'cancelled';
-
-interface FileEntry {
-  // Only present for a live, same-session file selection -- a
-  // reservation recovered from a page reload has no File object to
-  // re-PUT, only enough declared metadata to verify or cancel it.
-  file?: File;
-  filename: string;
-  declaredContentType: string;
-  declaredSizeBytes: number;
-  storageObjectKey?: string;
-  signedUploadUrl?: string;
-  phase: EntryPhase;
-  message?: string;
 }
 
 interface PendingReservation {
@@ -71,29 +51,68 @@ interface PendingReservation {
 type TokenState =
   | { status: 'checking' }
   | { status: 'invalid' }
-  | {
-      status: 'valid';
-      maxFiles: number;
-      maxFileSizeBytes: number;
-      expiresAt: string;
-    };
+  | { status: 'valid'; maxFiles: number; maxFileSizeBytes: number; maxTotalSizeBytes: number; expiresAt: string };
 
 type FinishState = 'idle' | 'finishing' | 'error';
+
+function generateClientId(): string {
+  if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
+  return `${Date.now()}-${Math.random().toString(36).slice(2)}`;
+}
+
+function formatBytes(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${Math.round(bytes / (1024 * 1024))} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
+}
 
 export function UploadClient({ token }: UploadClientProps) {
   const [tokenState, setTokenState] = useState<TokenState>({ status: 'checking' });
   const [entries, setEntries] = useState<FileEntry[]>([]);
-  // R4 §1: sourced from the server on load and after every
-  // completion/cancel/finish response -- never inferred solely from
-  // local `entries`.
   const [completedCount, setCompletedCount] = useState(0);
+  const [reservedCount, setReservedCount] = useState(0);
   const [remainingFileSlots, setRemainingFileSlots] = useState<number | null>(null);
+  const [remainingBytes, setRemainingBytes] = useState<number | null>(null);
+  const [refreshError, setRefreshError] = useState('');
   const [finalized, setFinalized] = useState(false);
   const [finishState, setFinishState] = useState<FinishState>('idle');
   const [finishError, setFinishError] = useState('');
-  // Guards against duplicate/concurrent calls (sign, upload, verify,
-  // cancel) for the SAME entry index.
-  const inFlightRef = useRef<Set<number>>(new Set());
+  const inFlightRef = useRef<Set<string>>(new Set());
+  // R5 (§5): monotonically increasing sequence guard -- a refresh
+  // response is applied only if it is still the most recently
+  // ISSUED refresh by the time it resolves; an older, slower request
+  // that resolves after a newer one can never overwrite fresher state.
+  const refreshSeqRef = useRef(0);
+  const entriesRef = useRef<FileEntry[]>([]);
+  entriesRef.current = entries;
+
+  /** R5 (§5): the single reusable function that refreshes every authoritative quota field from the server. Never guesses on failure. */
+  async function refreshUploadState(): Promise<void> {
+    const seq = ++refreshSeqRef.current;
+    try {
+      const response = await fetch(`/api/upload/${encodeURIComponent(token)}`);
+      if (seq !== refreshSeqRef.current) return;
+      if (!response.ok) {
+        setRefreshError('Your file state could not be refreshed. Please reload the page.');
+        return;
+      }
+      const body = (await response.json()) as {
+        completedCount: number;
+        reservedCount: number;
+        remainingFileSlots: number;
+        remainingBytes: number;
+      };
+      if (seq !== refreshSeqRef.current) return;
+      setRefreshError('');
+      setCompletedCount(body.completedCount);
+      setReservedCount(body.reservedCount);
+      setRemainingFileSlots(body.remainingFileSlots);
+      setRemainingBytes(body.remainingBytes);
+    } catch {
+      if (seq !== refreshSeqRef.current) return;
+      setRefreshError('Your file state could not be refreshed. Please check your connection.');
+    }
+  }
 
   useEffect(() => {
     let cancelled = false;
@@ -107,22 +126,31 @@ export function UploadClient({ token }: UploadClientProps) {
         const body = (await response.json()) as {
           maxFiles: number;
           maxFileSizeBytes: number;
+          maxTotalSizeBytes: number;
           expiresAt: string;
           completedCount: number;
+          reservedCount: number;
           remainingFileSlots: number;
+          remainingBytes: number;
           pendingReservations: PendingReservation[];
         };
-        setTokenState({ status: 'valid', maxFiles: body.maxFiles, maxFileSizeBytes: body.maxFileSizeBytes, expiresAt: body.expiresAt });
-        // R4 §1/§2.4: initialize completed count and remaining limits
-        // from the GET response, and surface any pending reservation
-        // (from a prior visit, this session or a reload) as a
-        // recoverable entry -- never silently dropped.
+        setTokenState({
+          status: 'valid',
+          maxFiles: body.maxFiles,
+          maxFileSizeBytes: body.maxFileSizeBytes,
+          maxTotalSizeBytes: body.maxTotalSizeBytes,
+          expiresAt: body.expiresAt,
+        });
         setCompletedCount(body.completedCount);
+        setReservedCount(body.reservedCount);
         setRemainingFileSlots(body.remainingFileSlots);
+        setRemainingBytes(body.remainingBytes);
         if (body.pendingReservations.length > 0) {
           setEntries((prev) => [
             ...body.pendingReservations.map(
               (reservation): FileEntry => ({
+                clientEntryId: generateClientId(),
+                reservationKey: generateClientId(),
                 filename: reservation.originalFilename,
                 declaredContentType: reservation.declaredContentType,
                 declaredSizeBytes: reservation.declaredSizeBytes,
@@ -142,13 +170,13 @@ export function UploadClient({ token }: UploadClientProps) {
     };
   }, [token]);
 
-  function updateEntry(index: number, patch: Partial<FileEntry>) {
-    setEntries((prev) => prev.map((e, i) => (i === index ? { ...e, ...patch } : e)));
-  }
-
   function onFilesSelected(fileList: FileList | null) {
     if (!fileList || finalized) return;
     const additions: FileEntry[] = Array.from(fileList).map((file) => ({
+      clientEntryId: generateClientId(),
+      // R5 (§6): generated ONCE here, reused verbatim for every sign
+      // retry of this exact entry -- never regenerated.
+      reservationKey: generateClientId(),
       file,
       filename: file.name,
       declaredContentType: file.type || 'application/octet-stream',
@@ -158,13 +186,16 @@ export function UploadClient({ token }: UploadClientProps) {
     setEntries((prev) => [...prev, ...additions]);
   }
 
-  /** Sign -> PUT -> complete, for a brand-new (never-signed) entry. */
-  async function signAndUpload(index: number) {
-    if (inFlightRef.current.has(index) || finalized) return;
-    inFlightRef.current.add(index);
-    const entry = entries[index];
+  async function signAndUpload(clientEntryId: string) {
+    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    inFlightRef.current.add(clientEntryId);
+    const entry = findEntryById(entriesRef.current, clientEntryId);
+    if (!entry) {
+      inFlightRef.current.delete(clientEntryId);
+      return;
+    }
 
-    updateEntry(index, { phase: 'signing' });
+    setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signing' }));
     try {
       const signResponse = await fetch(`/api/upload/${encodeURIComponent(token)}/sign`, {
         method: 'POST',
@@ -173,37 +204,40 @@ export function UploadClient({ token }: UploadClientProps) {
           filename: entry.filename,
           contentType: entry.declaredContentType,
           sizeBytes: entry.declaredSizeBytes,
+          reservationKey: entry.reservationKey,
         }),
       });
       if (!signResponse.ok) {
         const body = (await signResponse.json().catch(() => null)) as { error?: string } | null;
-        updateEntry(index, { phase: 'rejected', message: body?.error || 'File not accepted.' });
-        inFlightRef.current.delete(index);
+        setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: body?.error || 'File not accepted. You can retry.' }));
+        inFlightRef.current.delete(clientEntryId);
+        await refreshUploadState();
         return;
       }
       const { uploadUrl, storageObjectKey } = (await signResponse.json()) as { uploadUrl: string; storageObjectKey: string };
-      updateEntry(index, { phase: 'signed', storageObjectKey, signedUploadUrl: uploadUrl });
-      inFlightRef.current.delete(index);
-      await uploadEntry(index, { storageObjectKey, signedUploadUrl: uploadUrl });
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signed', storageObjectKey, signedUploadUrl: uploadUrl }));
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
+      await uploadEntry(clientEntryId, { storageObjectKey, signedUploadUrl: uploadUrl });
     } catch {
-      updateEntry(index, { phase: 'recoverable_error', message: 'Network error while requesting an upload slot. Please try again.' });
-      inFlightRef.current.delete(index);
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while requesting an upload slot. You can retry -- this will not create a duplicate.' }));
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
     }
   }
 
-  /** PUT the file bytes for an already-signed entry. Reusable for retry -- never re-signs, never consumes additional quota. */
-  async function uploadEntry(index: number, signed?: { storageObjectKey: string; signedUploadUrl: string }) {
-    if (inFlightRef.current.has(index) || finalized) return;
-    inFlightRef.current.add(index);
-    const entry = entries[index];
-    const storageObjectKey = signed?.storageObjectKey ?? entry.storageObjectKey;
-    const signedUploadUrl = signed?.signedUploadUrl ?? entry.signedUploadUrl;
-    if (!storageObjectKey || !signedUploadUrl || !entry.file) {
-      inFlightRef.current.delete(index);
+  async function uploadEntry(clientEntryId: string, signed?: { storageObjectKey: string; signedUploadUrl: string }) {
+    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    inFlightRef.current.add(clientEntryId);
+    const entry = findEntryById(entriesRef.current, clientEntryId);
+    const storageObjectKey = signed?.storageObjectKey ?? entry?.storageObjectKey;
+    const signedUploadUrl = signed?.signedUploadUrl ?? entry?.signedUploadUrl;
+    if (!entry || !storageObjectKey || !signedUploadUrl || !entry.file) {
+      inFlightRef.current.delete(clientEntryId);
       return;
     }
 
-    updateEntry(index, { phase: 'uploading' });
+    setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'uploading' }));
     try {
       const putResponse = await fetch(signedUploadUrl, {
         method: 'PUT',
@@ -211,33 +245,33 @@ export function UploadClient({ token }: UploadClientProps) {
         body: entry.file,
       });
       if (!putResponse.ok) {
-        // R4 §2.2: a failed/ambiguous PUT preserves the reservation
-        // -- the customer can retry the SAME signed upload.
-        updateEntry(index, { phase: 'recoverable_error', message: 'Upload failed. You can retry without losing your place.' });
-        inFlightRef.current.delete(index);
+        setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Upload failed. You can retry without losing your place.' }));
+        inFlightRef.current.delete(clientEntryId);
+        await refreshUploadState();
         return;
       }
-      updateEntry(index, { phase: 'uploaded_unverified' });
-      inFlightRef.current.delete(index);
-      await verifyEntry(index, storageObjectKey);
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'uploaded_unverified' }));
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
+      await verifyEntry(clientEntryId, storageObjectKey);
     } catch {
-      updateEntry(index, { phase: 'recoverable_error', message: 'Network error during upload. You can retry without losing your place.' });
-      inFlightRef.current.delete(index);
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error during upload. You can retry without losing your place.' }));
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
     }
   }
 
-  /** Calls .../complete for an already-uploaded (or possibly-uploaded, e.g. recovered-after-reload) entry. Never creates a new reservation. */
-  async function verifyEntry(index: number, storageObjectKeyOverride?: string) {
-    if (inFlightRef.current.has(index) || finalized) return;
-    inFlightRef.current.add(index);
-    const entry = entries[index];
-    const storageObjectKey = storageObjectKeyOverride ?? entry.storageObjectKey;
+  async function verifyEntry(clientEntryId: string, storageObjectKeyOverride?: string) {
+    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    inFlightRef.current.add(clientEntryId);
+    const entry = findEntryById(entriesRef.current, clientEntryId);
+    const storageObjectKey = storageObjectKeyOverride ?? entry?.storageObjectKey;
     if (!storageObjectKey) {
-      inFlightRef.current.delete(index);
+      inFlightRef.current.delete(clientEntryId);
       return;
     }
 
-    updateEntry(index, { phase: 'verifying' });
+    setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'verifying' }));
     try {
       const completeResponse = await fetch(`/api/upload/${encodeURIComponent(token)}/complete`, {
         method: 'POST',
@@ -245,35 +279,44 @@ export function UploadClient({ token }: UploadClientProps) {
         body: JSON.stringify({ storageObjectKey, finishSession: false }),
       });
       if (!completeResponse.ok) {
-        updateEntry(index, {
-          phase: 'recoverable_error',
-          message: 'Could not verify this file yet. If you already uploaded it, try Verify again; otherwise Cancel and re-select it.',
-        });
-        inFlightRef.current.delete(index);
+        setEntries((prev) =>
+          updateEntryById(prev, clientEntryId, {
+            phase: 'recoverable_error',
+            message: 'Could not verify this file yet. If you already uploaded it, try Verify again; otherwise Cancel and re-select it.',
+          })
+        );
+        inFlightRef.current.delete(clientEntryId);
+        await refreshUploadState();
         return;
       }
       const completeBody = (await completeResponse.json()) as { fileCount: number; finalized: boolean };
-      updateEntry(index, { phase: 'completed', message: undefined });
-      setCompletedCount(completeBody.fileCount);
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'completed', message: undefined }));
       if (completeBody.finalized) setFinalized(true);
-      inFlightRef.current.delete(index);
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
     } catch {
-      updateEntry(index, { phase: 'recoverable_error', message: 'Network error while verifying. Please retry.' });
-      inFlightRef.current.delete(index);
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while verifying. Please retry.' }));
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
     }
   }
 
-  /** R4 §2.3: releases a still-reserved entry's quota entirely. */
-  async function cancelEntry(index: number) {
-    if (inFlightRef.current.has(index) || finalized) return;
-    inFlightRef.current.add(index);
-    const entry = entries[index];
-    if (!entry.storageObjectKey) {
-      // Never signed yet -- nothing server-side to cancel, just drop it locally.
-      setEntries((prev) => prev.filter((_, i) => i !== index));
-      inFlightRef.current.delete(index);
+  async function cancelEntry(clientEntryId: string) {
+    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    inFlightRef.current.add(clientEntryId);
+    const entry = findEntryById(entriesRef.current, clientEntryId);
+    if (!entry) {
+      inFlightRef.current.delete(clientEntryId);
       return;
     }
+    if (!entry.storageObjectKey) {
+      setEntries((prev) => removeEntryById(prev, clientEntryId));
+      inFlightRef.current.delete(clientEntryId);
+      return;
+    }
+    // R5 (§3 UI): a visible cancelling phase, which counts as "busy"
+    // and therefore blocks Finish while the request is in flight.
+    setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'cancelling' }));
     try {
       const response = await fetch(`/api/upload/${encodeURIComponent(token)}/cancel`, {
         method: 'POST',
@@ -281,22 +324,15 @@ export function UploadClient({ token }: UploadClientProps) {
         body: JSON.stringify({ storageObjectKey: entry.storageObjectKey }),
       });
       if (response.ok) {
-        updateEntry(index, { phase: 'cancelled', message: undefined });
-        // Refresh remaining-slots display from the token-state
-        // endpoint rather than guessing locally.
-        const stateResponse = await fetch(`/api/upload/${encodeURIComponent(token)}`);
-        if (stateResponse.ok) {
-          const body = (await stateResponse.json()) as { remainingFileSlots: number; completedCount: number };
-          setRemainingFileSlots(body.remainingFileSlots);
-          setCompletedCount(body.completedCount);
-        }
+        setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'cancelled', message: undefined }));
       } else {
-        updateEntry(index, { message: 'Could not cancel this file. Please try again.' });
+        setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Could not cancel this file. Please try again.' }));
       }
     } catch {
-      updateEntry(index, { message: 'Network error while cancelling. Please try again.' });
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while cancelling. Please try again.' }));
     } finally {
-      inFlightRef.current.delete(index);
+      inFlightRef.current.delete(clientEntryId);
+      await refreshUploadState();
     }
   }
 
@@ -313,6 +349,7 @@ export function UploadClient({ token }: UploadClientProps) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;
         setFinishState('error');
         setFinishError(body?.error || 'Could not finish this upload session. Please try again.');
+        await refreshUploadState();
         return;
       }
       const body = (await response.json()) as { fileCount: number };
@@ -341,20 +378,26 @@ export function UploadClient({ token }: UploadClientProps) {
     );
   }
 
-  const anyBusy = entries.some((e) => ['signing', 'uploading', 'verifying'].includes(e.phase));
-  const canFinish = !finalized && completedCount > 0 && !anyBusy && finishState !== 'finishing';
+  const finishDisabled = !computeCanFinish({ completedCount, reservedCount, entries, finalized, finishing: finishState === 'finishing' });
   const remaining = remainingFileSlots ?? tokenState.maxFiles;
 
   return (
     <main className="max-w-2xl mx-auto py-24 px-6">
       <h1 className="text-2xl font-bold text-phx-navy mb-3">Upload your files</h1>
       <p className="text-sm text-gray-600 mb-2">
-        You can upload up to {tokenState.maxFiles} files (20 MB per file, 60 MB total). This link expires{' '}
+        You can upload up to {tokenState.maxFiles} files ({formatBytes(tokenState.maxFileSizeBytes)} per file,{' '}
+        {formatBytes(tokenState.maxTotalSizeBytes)} total). This link expires{' '}
         {new Date(tokenState.expiresAt).toLocaleString()} and can only be used once.
       </p>
-      <p className="text-sm text-gray-500 mb-8">
-        {completedCount} of {tokenState.maxFiles} files received{!finalized ? ` — ${remaining} remaining` : ''}.
+      <p className="text-sm text-gray-500 mb-2">
+        {completedCount} of {tokenState.maxFiles} files received{!finalized ? ` — ${remaining} remaining` : ''}
+        {remainingBytes !== null && !finalized ? ` (${formatBytes(remainingBytes)} remaining)` : ''}.
       </p>
+      {refreshError && (
+        <p className="text-xs text-amber-600 mb-4" role="status">
+          {refreshError}
+        </p>
+      )}
 
       {!finalized && (
         <input
@@ -367,18 +410,19 @@ export function UploadClient({ token }: UploadClientProps) {
       )}
 
       <ul className="space-y-3">
-        {entries.map((entry, index) => (
-          <li key={`${entry.filename}-${index}`} className="flex items-center justify-between border border-gray-200 rounded-lg p-3 gap-3">
+        {entries.map((entry) => (
+          <li key={entry.clientEntryId} className="flex items-center justify-between border border-gray-200 rounded-lg p-3 gap-3">
             <span className="text-sm text-gray-700 truncate">{entry.filename}</span>
             <span className="text-xs flex items-center gap-2 shrink-0">
               {entry.phase === 'pending' && !finalized && (
-                <button onClick={() => signAndUpload(index)} className="text-phx-cyan-dark underline" type="button">
+                <button onClick={() => signAndUpload(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
                   Upload
                 </button>
               )}
               {(entry.phase === 'signing' || entry.phase === 'uploading' || entry.phase === 'verifying') && (
                 <span className="text-gray-500">Working…</span>
               )}
+              {entry.phase === 'cancelling' && <span className="text-gray-500">Cancelling…</span>}
               {entry.phase === 'completed' && <span className="text-green-600">Received</span>}
               {entry.phase === 'rejected' && <span className="text-red-600">{entry.message}</span>}
               {entry.phase === 'cancelled' && <span className="text-gray-400">Cancelled</span>}
@@ -386,16 +430,16 @@ export function UploadClient({ token }: UploadClientProps) {
                 <>
                   <span className="text-amber-600">{entry.message || 'Not yet confirmed.'}</span>
                   {entry.phase === 'recoverable_error' && entry.file && entry.signedUploadUrl && (
-                    <button onClick={() => uploadEntry(index)} className="text-phx-cyan-dark underline" type="button">
+                    <button onClick={() => uploadEntry(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
                       Retry upload
                     </button>
                   )}
                   {entry.storageObjectKey && (
-                    <button onClick={() => verifyEntry(index)} className="text-phx-cyan-dark underline" type="button">
+                    <button onClick={() => verifyEntry(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
                       Verify
                     </button>
                   )}
-                  <button onClick={() => cancelEntry(index)} className="text-red-600 underline" type="button">
+                  <button onClick={() => cancelEntry(entry.clientEntryId)} className="text-red-600 underline" type="button">
                     Cancel
                   </button>
                 </>
@@ -410,13 +454,19 @@ export function UploadClient({ token }: UploadClientProps) {
           <button
             type="button"
             onClick={handleFinish}
-            disabled={!canFinish}
+            disabled={finishDisabled}
             className="inline-flex items-center justify-center px-6 py-3 bg-phx-navy text-white text-sm font-semibold rounded-lg disabled:opacity-40 disabled:cursor-not-allowed"
           >
             {finishState === 'finishing' ? 'Finishing…' : 'Finish uploading'}
           </button>
           {completedCount === 0 && (
             <p className="text-xs text-gray-400 mt-2">Upload at least one file before finishing.</p>
+          )}
+          {reservedCount > 0 && (
+            <p className="text-xs text-gray-400 mt-2">Please verify or cancel your pending file(s) before finishing.</p>
+          )}
+          {anyEntryBusy(entries) && reservedCount === 0 && (
+            <p className="text-xs text-gray-400 mt-2">Please wait for the current action to finish.</p>
           )}
           {finishState === 'error' && (
             <p className="text-sm text-red-600 mt-2" role="alert">

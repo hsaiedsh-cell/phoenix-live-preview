@@ -38,7 +38,7 @@ async function createSessionWithToken(requestId: string): Promise<{ rawToken: st
 }
 
 async function completeOneFile(rawToken: string, storage: ReturnType<typeof createFakeStorageAdapter>, filename: string) {
-  const sign = await signUploadObject(rawToken, { filename, contentType: 'application/pdf', sizeBytes: 1000 });
+  const sign = await signUploadObject(rawToken, { filename, contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
   if (sign.kind !== 'ok') throw new Error(`unexpected sign outcome: ${sign.kind}`);
   storage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
   return completeUploadObject(rawToken, { storageObjectKey: sign.storageObjectKey });

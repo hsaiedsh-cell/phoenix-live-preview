@@ -81,7 +81,7 @@ async function main() {
     const request = await createTestRequest();
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
     await intakeQuery(`UPDATE public_upload_sessions SET expires_at = now() - interval '1 second' WHERE id = $1`, [sessionId]);
-    const outcome = await signUploadObject(rawToken, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const outcome = await signUploadObject(rawToken, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(outcome.kind === 'denied', 'end-to-end: signing against an expired session is denied');
     const reservationRows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE upload_session_id = $1`, [sessionId]);
     assert(Number(reservationRows[0].count) === 0, 'no reservation row was created');
@@ -96,7 +96,7 @@ async function main() {
     // longer active), so this specifically proves the redundant,
     // defense-in-depth locked-transaction check independently agrees.
     await uploadSessionsRepo.revokeSession(sessionId);
-    const outcome = await signUploadObject(rawToken, { filename: 'b.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const outcome = await signUploadObject(rawToken, { filename: 'b.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(outcome.kind === 'denied', 'signing is denied once the session is revoked');
     const reservationRows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE upload_session_id = $1`, [sessionId]);
     assert(Number(reservationRows[0].count) === 0, 'no reservation row was created');
@@ -112,7 +112,7 @@ async function main() {
     // specifically as its own independent revalidation condition, set
     // ONLY finalized_at here, leaving status='active').
     await intakeQuery(`UPDATE public_upload_sessions SET finalized_at = now() WHERE id = $1`, [sessionId]);
-    const outcome = await signUploadObject(rawToken, { filename: 'c.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const outcome = await signUploadObject(rawToken, { filename: 'c.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(
       outcome.kind === 'denied',
       'signing is denied once finalized_at is set, even when status column alone would otherwise still read active'
@@ -125,7 +125,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const outcome = await signUploadObject(rawToken, { filename: 'ok.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const outcome = await signUploadObject(rawToken, { filename: 'ok.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(outcome.kind === 'ok', 'a genuinely active, unexpired, non-revoked, non-finalized session still signs successfully');
   }
 

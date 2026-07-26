@@ -61,7 +61,7 @@ async function main() {
     assert(!!finalizeFnMatch, 'maybeFinalizeInTransaction found in source');
     if (finalizeFnMatch) {
       assert(/return \{ kind: 'not_finalized', completedCount \}/.test(finalizeFnMatch[0]), 'the not_finalized branch returns completedCount too (not just the finalized branch)');
-      assert(/return \{ kind: 'finalized'.*completedCount \}/.test(finalizeFnMatch[0]), 'the finalized branch returns completedCount computed inside the same transaction');
+      assert(/return \{\s*kind: 'finalized'[\s\S]*?completedCount,?\s*\}/.test(finalizeFnMatch[0]), 'the finalized branch returns completedCount computed inside the same transaction');
     }
   }
 
@@ -69,7 +69,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'count-check.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'count-check.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
@@ -86,8 +86,8 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
-    const sign1 = await signUploadObject(rawToken, { filename: 'f1.pdf', contentType: 'application/pdf', sizeBytes: 500 });
-    const sign2 = await signUploadObject(rawToken, { filename: 'f2.pdf', contentType: 'application/pdf', sizeBytes: 500 });
+    const sign1 = await signUploadObject(rawToken, { filename: 'f1.pdf', contentType: 'application/pdf', sizeBytes: 500 , reservationKey: randomUUID() });
+    const sign2 = await signUploadObject(rawToken, { filename: 'f2.pdf', contentType: 'application/pdf', sizeBytes: 500 , reservationKey: randomUUID() });
     if (sign1.kind === 'ok' && sign2.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign1.storageObjectKey, { sizeBytes: 500, contentType: 'application/pdf' });
       fakeStorage.simulatedObjects.set(sign2.storageObjectKey, { sizeBytes: 500, contentType: 'application/pdf' });
@@ -117,7 +117,7 @@ async function main() {
     __setEmailForTests(createFakeEmailSender('always_fail'));
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'postcommit-proof.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'postcommit-proof.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });

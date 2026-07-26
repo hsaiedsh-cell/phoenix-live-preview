@@ -82,7 +82,7 @@ async function main() {
     const request = await createTestRequest();
     const rawToken = generateRawUploadToken();
     await uploadSessionsRepo.createUploadSession(request.id, tokenHash(rawToken));
-    const outcome = await signUploadObject(rawToken, { filename: 'signed-event.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const outcome = await signUploadObject(rawToken, { filename: 'signed-event.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(outcome.kind === 'ok', 'signing succeeds and returns a real signed URL -- the observational upload.object_signed event (best-effort, via recordPostCommitEvent) never affects this outcome');
   }
 

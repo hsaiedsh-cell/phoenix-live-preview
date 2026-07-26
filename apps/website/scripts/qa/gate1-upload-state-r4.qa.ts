@@ -53,7 +53,7 @@ async function main() {
       assert(initial.remainingFileSlots === initial.maxFiles, 'remaining file slots equals maxFiles before anything is reserved');
     }
 
-    const sign = await signUploadObject(rawToken, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
@@ -79,7 +79,7 @@ async function main() {
     // the page had just been reloaded with no other client state at all.
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'reload.pdf', contentType: 'application/pdf', sizeBytes: 500 });
+    const sign = await signUploadObject(rawToken, { filename: 'reload.pdf', contentType: 'application/pdf', sizeBytes: 500 , reservationKey: randomUUID() });
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 500, contentType: 'application/pdf' });
       await completeUploadObject(rawToken, { storageObjectKey: sign.storageObjectKey });
@@ -94,7 +94,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'pending-recover.pdf', contentType: 'application/pdf', sizeBytes: 750 });
+    const sign = await signUploadObject(rawToken, { filename: 'pending-recover.pdf', contentType: 'application/pdf', sizeBytes: 750 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds (reservation created, never completed -- simulating an interrupted upload)');
 
     const reloaded = await checkUploadToken(rawToken);

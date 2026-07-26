@@ -47,7 +47,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'cancel-me.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'cancel-me.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       const beforeCancel = await checkUploadToken(rawToken);
@@ -76,15 +76,15 @@ async function main() {
     const maxFiles = firstCheck.kind === 'ok' ? firstCheck.maxFiles : 0;
     const keys: string[] = [];
     for (let i = 0; i < maxFiles; i += 1) {
-      const sign = await signUploadObject(rawToken, { filename: `fill-${i}.pdf`, contentType: 'application/pdf', sizeBytes: 100 });
+      const sign = await signUploadObject(rawToken, { filename: `fill-${i}.pdf`, contentType: 'application/pdf', sizeBytes: 100, reservationKey: randomUUID() });
       assert(sign.kind === 'ok', `sign ${i} succeeds while filling all slots`);
       if (sign.kind === 'ok') keys.push(sign.storageObjectKey);
     }
-    const fullOutcome = await signUploadObject(rawToken, { filename: 'overflow.pdf', contentType: 'application/pdf', sizeBytes: 100 });
+    const fullOutcome = await signUploadObject(rawToken, { filename: 'overflow.pdf', contentType: 'application/pdf', sizeBytes: 100 , reservationKey: randomUUID() });
     assert(fullOutcome.kind === 'rejected' && fullOutcome.reason === 'file_count_exceeded', 'signing a 6th file is rejected once all slots are filled');
 
     await cancelUploadReservation(rawToken, keys[0]);
-    const retryOutcome = await signUploadObject(rawToken, { filename: 'reuse-freed-slot.pdf', contentType: 'application/pdf', sizeBytes: 100 });
+    const retryOutcome = await signUploadObject(rawToken, { filename: 'reuse-freed-slot.pdf', contentType: 'application/pdf', sizeBytes: 100 , reservationKey: randomUUID() });
     assert(retryOutcome.kind === 'ok', 'signing succeeds again immediately after cancelling one reservation frees its slot');
   }
 
@@ -92,7 +92,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'completed.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'completed.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
@@ -113,7 +113,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'double-cancel.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'double-cancel.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       const first = await cancelUploadReservation(rawToken, sign.storageObjectKey);
@@ -127,7 +127,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'retry-same.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'retry-same.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       // Simulate a failed-then-retried completion: verifyObjectExists
@@ -153,7 +153,7 @@ async function main() {
   {
     const requestA = await createTestRequest();
     const { rawToken: tokenA } = await createSessionWithToken(requestA.id);
-    const signA = await signUploadObject(tokenA, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const signA = await signUploadObject(tokenA, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(signA.kind === 'ok', 'sign for session A succeeds');
 
     const requestB = await createTestRequest();
@@ -172,7 +172,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'cancel-delete-fails.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'cancel-delete-fails.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedDeleteFailures.add(sign.storageObjectKey);

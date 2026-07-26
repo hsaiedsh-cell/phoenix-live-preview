@@ -49,7 +49,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'a.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
@@ -73,7 +73,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'b.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'b.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
@@ -131,7 +131,7 @@ async function main() {
   {
     const request = await createTestRequest();
     const { rawToken } = await createSessionWithToken(request.id);
-    const sign = await signUploadObject(rawToken, { filename: 'once.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'once.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
@@ -148,7 +148,7 @@ async function main() {
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
     const emailForFinish = createFakeEmailSender('always_succeed');
     __setEmailForTests(emailForFinish);
-    const sign = await signUploadObject(rawToken, { filename: 'f.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'f.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
       await completeUploadObject(rawToken, { storageObjectKey: sign.storageObjectKey });
@@ -220,7 +220,7 @@ async function main() {
     section('10. R2 §4: completed provider objects are never removed by cleanup');
     const completedRequest = await createTestRequest();
     const { rawToken: completedToken } = await createSessionWithToken(completedRequest.id);
-    const completedSign = await signUploadObject(completedToken, { filename: 'keep.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const completedSign = await signUploadObject(completedToken, { filename: 'keep.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     if (completedSign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(completedSign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });
       await completeUploadObject(completedToken, { storageObjectKey: completedSign.storageObjectKey });

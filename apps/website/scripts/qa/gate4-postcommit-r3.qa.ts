@@ -127,7 +127,7 @@ async function main() {
     const rawToken = generateRawUploadToken();
     await uploadSessionsRepo.createUploadSession(requestId, tokenHash(rawToken));
 
-    const sign = await signUploadObject(rawToken, { filename: 'f.pdf', contentType: 'application/pdf', sizeBytes: 1000 });
+    const sign = await signUploadObject(rawToken, { filename: 'f.pdf', contentType: 'application/pdf', sizeBytes: 1000 , reservationKey: randomUUID() });
     assert(sign.kind === 'ok', 'sign succeeds');
     if (sign.kind === 'ok') {
       fakeStorage.simulatedObjects.set(sign.storageObjectKey, { sizeBytes: 1000, contentType: 'application/pdf' });

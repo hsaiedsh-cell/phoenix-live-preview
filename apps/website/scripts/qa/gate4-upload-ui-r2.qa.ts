@@ -19,6 +19,8 @@ import { assert, section, printSummaryAndExit } from './assert';
 const ROOT = join(__dirname, '..', '..');
 const source = readFileSync(join(ROOT, 'src/components/intake/UploadClient.tsx'), 'utf8');
 
+const stateHelpersSource = readFileSync(join(ROOT, 'src/components/intake/upload-client-state.ts'), 'utf8');
+
 async function main() {
   section('1. R2 §3.2 item 1: completion body no longer sends originalFilename/contentType');
   const completeCallMatch = source.match(/complete`,\s*\{[\s\S]*?\}\);/);
@@ -42,29 +44,35 @@ async function main() {
   assert(source.includes('/finish`'), 'a request to the dedicated .../finish endpoint is present');
   assert(source.includes('handleFinish'), 'a dedicated handler function backs the Finish action');
 
-  section('4. R2 §3.2 item 4: Finish is enabled only when >=1 completed, nothing uploading, not already finalized');
-  const canFinishMatch = source.match(/const canFinish = ([^;]+);/);
-  assert(!!canFinishMatch, 'canFinish is computed as an explicit boolean expression');
-  if (canFinishMatch) {
-    const expr = canFinishMatch[1];
-    assert(expr.includes('!finalized'), 'canFinish requires the session not already be finalized');
-    assert(expr.includes('completedCount > 0'), 'canFinish requires at least one completed file');
-    assert(expr.includes('!anyBusy'), 'canFinish requires nothing currently busy (signing/uploading/verifying) -- R4 renamed this from anyUploading to anyBusy to cover the new verify phase too');
+  section('4. R2 §3.2 item 4 (R5: logic extracted to upload-client-state.ts): Finish is enabled only when >=1 completed, reservedCount is 0, nothing busy, not already finalized');
+  const canFinishFnMatch = stateHelpersSource.match(/export function canFinish\([\s\S]*?\n\}/);
+  assert(!!canFinishFnMatch, 'canFinish is now an exported, directly-testable function in upload-client-state.ts (R5 extracted the logic out of the component)');
+  if (canFinishFnMatch) {
+    const body = canFinishFnMatch[0];
+    assert(body.includes('params.finalized'), 'canFinish requires the session not already be finalized');
+    assert(body.includes('params.completedCount <= 0'), 'canFinish requires at least one completed file');
+    assert(body.includes('params.reservedCount !== 0'), 'canFinish (R5) additionally requires the server-authoritative reservedCount to be exactly zero');
+    assert(body.includes('anyEntryBusy(params.entries)'), 'canFinish requires nothing currently busy');
   }
-  assert(source.includes('disabled={!canFinish}'), 'the Finish button is actually wired to the canFinish computation via its disabled prop');
+  assert(source.includes('computeCanFinish({'), 'the component calls the extracted canFinish function rather than reimplementing the logic inline');
+  assert(source.includes('disabled={finishDisabled}'), 'the Finish button is wired to the canFinish computation via its disabled prop');
 
   section('5. R2 §3.2 item 5: a rejected/failed entry does not block finishing once one file has completed');
-  // canFinish is derived purely from completedCount/anyUploading/finalized
-  // -- it has no dependency on entries.some(status==='rejected'/'error')
-  // at all, which is exactly what allows finishing despite a rejected
-  // file elsewhere in the list.
-  assert(!/canFinish[\s\S]{0,10}rejected/.test(source), 'canFinish\'s definition has no dependency on any entry being in the rejected state');
-  assert(!/canFinish[\s\S]{0,10}error/i.test(source.replace(/errorState|finishError/g, '')), 'canFinish\'s definition has no dependency on any entry being in the error state');
+  // canFinish (now in upload-client-state.ts, R5) is derived purely
+  // from completedCount/reservedCount/anyEntryBusy/finalized/finishing
+  // -- it has no dependency on any entry's phase being 'rejected' or
+  // 'recoverable_error' specifically, which is exactly what allows
+  // finishing despite a rejected file elsewhere in the list.
+  if (canFinishFnMatch) {
+    assert(!canFinishFnMatch[0].includes('rejected'), "canFinish's definition has no dependency on any entry being in the rejected state");
+    assert(!canFinishFnMatch[0].includes('recoverable_error'), "canFinish's definition has no dependency on any entry being in the recoverable_error state");
+  }
 
-  section('6. R2 §3.2 item 6: parallel clicks cannot cause duplicate sign/complete calls for the same entry');
+  section('6. R2 §3.2 item 6 (R5: keyed by stable clientEntryId, not array index): parallel clicks cannot cause duplicate sign/complete calls for the same entry');
   assert(source.includes('inFlightRef'), 'an in-flight guard ref exists');
-  assert(source.includes('inFlightRef.current.has(index)'), 'uploadOne checks the in-flight guard before proceeding');
-  assert(source.includes('inFlightRef.current.add(index)'), 'uploadOne marks itself in-flight before doing any async work');
+  assert(source.includes('inFlightRef.current.has(clientEntryId)'), 'signAndUpload checks the in-flight guard (keyed by the stable clientEntryId) before proceeding');
+  assert(source.includes('inFlightRef.current.add(clientEntryId)'), 'signAndUpload marks itself in-flight (keyed by clientEntryId) before doing any async work');
+  assert(!source.includes('inFlightRef.current.has(index)') && !source.includes('inFlightRef.current.add(index)'), 'the in-flight guard no longer uses the mutable array index as its key at all');
 
   section('7. R2 §3.2 item 7: automatic server-side finalization at max file count is still respected client-side');
   assert(source.includes('if (completeBody.finalized)'), 'the client reacts to the server telling it a completion auto-finalized the session (max file count reached)');
@@ -78,11 +86,13 @@ async function main() {
   assert(/\{!finalized && \(\s*<input/.test(source), 'the file picker <input> is only rendered when NOT finalized');
   assert(/entry\.phase === 'pending' && !finalized/.test(source), 'the per-entry Upload button is only rendered for pending-phase entries when NOT finalized -- R4 renamed the per-entry field from status to phase');
 
-  section('10. R2 §3.2 item 10: completed count and remaining allowance are displayed from server state');
+  section('10. R2 §3.2 item 10 (R5: routed through the single refreshUploadState function): completed count and remaining allowance are displayed from server state');
   assert(source.includes('completedCount'), 'a completedCount piece of state exists');
-  assert(source.includes('setCompletedCount(completeBody.fileCount)'), 'completedCount is set from the server\'s completion response, not from counting local entries');
-  assert(source.includes('setCompletedCount(body.fileCount)'), 'completedCount is also updated from the finish response');
-  assert(/remainingFileSlots \?\? tokenState\.maxFiles/.test(source), 'remaining allowance is derived from server-sourced remainingFileSlots state (R4: fetched directly from the GET token-state response, not computed client-side from maxFiles - completedCount)');
+  assert(source.includes('async function refreshUploadState'), 'a single reusable refreshUploadState function exists (R5 §5)');
+  assert(source.includes('setCompletedCount(body.completedCount)'), 'refreshUploadState sets completedCount from the server response, not from counting local entries');
+  assert(source.includes('await refreshUploadState()'), 'refreshUploadState is actually invoked from the upload flow (not merely defined)');
+  assert(source.includes('setCompletedCount(body.fileCount)'), 'completedCount is also updated directly from the finish response');
+  assert(/remainingFileSlots \?\? tokenState\.maxFiles/.test(source), 'remaining allowance is derived from server-sourced remainingFileSlots state, not computed client-side from maxFiles - completedCount');
 
   printSummaryAndExit();
 }

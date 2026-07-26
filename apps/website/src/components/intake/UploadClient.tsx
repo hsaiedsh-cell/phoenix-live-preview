@@ -2,50 +2,47 @@
 
 // ============================================================
 // UploadClient — invitation-only private upload UI
-// PHX-LAUNCH-001 (R5: PHX-LAUNCH-001-R5 §3 UI, §4, §5, §6 client half)
+// PHX-LAUNCH-001 (R6: PHX-LAUNCH-001-R6 §1, §2, §3, §4)
 // ------------------------------------------------------------
-// R5 correction summary:
-//  - §4: every entry has a stable, client-generated clientEntryId
-//    (see upload-client-state.ts), used for the React key, the
-//    in-flight guard, and every update/remove/sign/upload/verify/
-//    cancel/retry target. The mutable array index is never used as
-//    an asynchronous identity -- removing entry A while entry B is
-//    still uploading can no longer cause B's eventual completion to
-//    update the wrong entry (or silently miss a since-shifted index).
-//  - §5: a single refreshUploadState() function is the ONLY place
-//    that updates completedCount/reservedCount/*Bytes/remaining*/
-//    pendingReservations/expiresAt from the server, called after
-//    every sign/completion/cancellation (success, failure, or
-//    ambiguous-but-recoverable outcome). A monotonic sequence guard
-//    discards a stale, out-of-order response rather than letting it
-//    overwrite newer state. A failed refresh shows a recoverable
-//    message and never guesses a quota value.
-//  - §6 (client half): each entry generates its OWN reservationKey
-//    once, at creation, and reuses it verbatim for every sign retry
-//    -- never regenerated, so a lost-response retry reuses the exact
-//    same server-side reservation instead of creating a second one.
+// R6 correction summary:
+//  - §1/§4: an entry left in `recoverable_error` with NO
+//    storageObjectKey (the sign response was lost or the request
+//    failed before the browser ever received one) now exposes a real
+//    "Retry upload request" action that calls signAndUpload() again
+//    with the exact SAME clientEntryId/reservationKey/filename/
+//    declaredContentType/declaredSizeBytes -- never a new
+//    reservationKey. The R5 server-side idempotent-sign contract was
+//    real but had no usable path from the customer interface until now.
+//  - §2: cancelEntry() no longer silently removes an entry whose
+//    storageObjectKey is unknown -- doing so previously hid an
+//    already-committed server reservation (still consuming quota)
+//    behind what looked like a successful local cancel. Local removal
+//    is now permitted ONLY for a never-submitted `pending` entry, or
+//    once the server has returned an explicit terminal/no-reservation
+//    result (phase 'terminal') for that entry.
+//  - §3: refreshUploadState now parses and applies the COMPLETE
+//    token-state response (not just four of its seven fields) and
+//    reconciles pendingReservations into the entry list via the pure,
+//    directly-testable reconcilePendingReservations helper -- keyed
+//    exclusively by storageObjectKey, never duplicating a recovered
+//    reservation across repeated refreshes, and merging a local entry
+//    with its recovered counterpart the moment they share an object key.
 // ============================================================
 
 import { useEffect, useRef, useState } from 'react';
 import {
   type FileEntry,
+  type PendingReservationSummary,
   updateEntryById,
   removeEntryById,
   findEntryById,
   canFinish as computeCanFinish,
   anyEntryBusy,
+  reconcilePendingReservations,
 } from './upload-client-state';
 
 interface UploadClientProps {
   token: string;
-}
-
-interface PendingReservation {
-  storageObjectKey: string;
-  originalFilename: string;
-  declaredContentType: string;
-  declaredSizeBytes: number;
-  reservationStatus: 'reserved';
 }
 
 type TokenState =
@@ -54,6 +51,20 @@ type TokenState =
   | { status: 'valid'; maxFiles: number; maxFileSizeBytes: number; maxTotalSizeBytes: number; expiresAt: string };
 
 type FinishState = 'idle' | 'finishing' | 'error';
+
+interface TokenStateResponse {
+  maxFiles: number;
+  maxFileSizeBytes: number;
+  maxTotalSizeBytes: number;
+  completedCount: number;
+  completedBytes: number;
+  reservedCount: number;
+  reservedBytes: number;
+  remainingFileSlots: number;
+  remainingBytes: number;
+  expiresAt: string;
+  pendingReservations: PendingReservationSummary[];
+}
 
 function generateClientId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
@@ -78,15 +89,14 @@ export function UploadClient({ token }: UploadClientProps) {
   const [finishState, setFinishState] = useState<FinishState>('idle');
   const [finishError, setFinishError] = useState('');
   const inFlightRef = useRef<Set<string>>(new Set());
-  // R5 (§5): monotonically increasing sequence guard -- a refresh
-  // response is applied only if it is still the most recently
-  // ISSUED refresh by the time it resolves; an older, slower request
-  // that resolves after a newer one can never overwrite fresher state.
+  // R5 (§5)/R6: monotonically increasing sequence guard -- a refresh
+  // response is applied only if it is still the most recently ISSUED
+  // refresh by the time it resolves.
   const refreshSeqRef = useRef(0);
   const entriesRef = useRef<FileEntry[]>([]);
   entriesRef.current = entries;
 
-  /** R5 (§5): the single reusable function that refreshes every authoritative quota field from the server. Never guesses on failure. */
+  /** R5 (§5) + R6 (§3): the single reusable function that refreshes the COMPLETE authoritative token-state response and reconciles pendingReservations into the entry list. Never guesses on failure. */
   async function refreshUploadState(): Promise<void> {
     const seq = ++refreshSeqRef.current;
     try {
@@ -96,18 +106,22 @@ export function UploadClient({ token }: UploadClientProps) {
         setRefreshError('Your file state could not be refreshed. Please reload the page.');
         return;
       }
-      const body = (await response.json()) as {
-        completedCount: number;
-        reservedCount: number;
-        remainingFileSlots: number;
-        remainingBytes: number;
-      };
+      const body = (await response.json()) as TokenStateResponse;
       if (seq !== refreshSeqRef.current) return;
       setRefreshError('');
       setCompletedCount(body.completedCount);
       setReservedCount(body.reservedCount);
       setRemainingFileSlots(body.remainingFileSlots);
       setRemainingBytes(body.remainingBytes);
+      // R6 (§3): reconcile the authoritative pendingReservations list
+      // into the entry array -- keyed by storageObjectKey, never
+      // duplicating, never clobbering an in-flight local action.
+      setEntries((prev) => reconcilePendingReservations(prev, body.pendingReservations));
+      setTokenState((prev) =>
+        prev.status === 'valid'
+          ? { ...prev, maxFiles: body.maxFiles, maxFileSizeBytes: body.maxFileSizeBytes, maxTotalSizeBytes: body.maxTotalSizeBytes, expiresAt: body.expiresAt }
+          : prev
+      );
     } catch {
       if (seq !== refreshSeqRef.current) return;
       setRefreshError('Your file state could not be refreshed. Please check your connection.');
@@ -123,17 +137,7 @@ export function UploadClient({ token }: UploadClientProps) {
           setTokenState({ status: 'invalid' });
           return;
         }
-        const body = (await response.json()) as {
-          maxFiles: number;
-          maxFileSizeBytes: number;
-          maxTotalSizeBytes: number;
-          expiresAt: string;
-          completedCount: number;
-          reservedCount: number;
-          remainingFileSlots: number;
-          remainingBytes: number;
-          pendingReservations: PendingReservation[];
-        };
+        const body = (await response.json()) as TokenStateResponse;
         setTokenState({
           status: 'valid',
           maxFiles: body.maxFiles,
@@ -145,22 +149,7 @@ export function UploadClient({ token }: UploadClientProps) {
         setReservedCount(body.reservedCount);
         setRemainingFileSlots(body.remainingFileSlots);
         setRemainingBytes(body.remainingBytes);
-        if (body.pendingReservations.length > 0) {
-          setEntries((prev) => [
-            ...body.pendingReservations.map(
-              (reservation): FileEntry => ({
-                clientEntryId: generateClientId(),
-                reservationKey: generateClientId(),
-                filename: reservation.originalFilename,
-                declaredContentType: reservation.declaredContentType,
-                declaredSizeBytes: reservation.declaredSizeBytes,
-                storageObjectKey: reservation.storageObjectKey,
-                phase: 'uploaded_unverified',
-              })
-            ),
-            ...prev,
-          ]);
-        }
+        setEntries((prev) => reconcilePendingReservations(prev, body.pendingReservations));
       })
       .catch(() => {
         if (!cancelled) setTokenState({ status: 'invalid' });
@@ -186,16 +175,17 @@ export function UploadClient({ token }: UploadClientProps) {
     setEntries((prev) => [...prev, ...additions]);
   }
 
+  /** Sign (or re-sign, using the SAME reservationKey) -> PUT -> complete. */
   async function signAndUpload(clientEntryId: string) {
     if (inFlightRef.current.has(clientEntryId) || finalized) return;
     inFlightRef.current.add(clientEntryId);
     const entry = findEntryById(entriesRef.current, clientEntryId);
-    if (!entry) {
+    if (!entry || !entry.reservationKey) {
       inFlightRef.current.delete(clientEntryId);
       return;
     }
 
-    setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signing' }));
+    setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signing', message: undefined }));
     try {
       const signResponse = await fetch(`/api/upload/${encodeURIComponent(token)}/sign`, {
         method: 'POST',
@@ -207,6 +197,19 @@ export function UploadClient({ token }: UploadClientProps) {
           reservationKey: entry.reservationKey,
         }),
       });
+      if (signResponse.status === 409) {
+        // R6 (§1/§4): an explicit terminal/conflict result -- do not
+        // keep presenting a retry that can never succeed.
+        setEntries((prev) =>
+          updateEntryById(prev, clientEntryId, {
+            phase: 'terminal',
+            message: 'This file entry can no longer be used. Please remove it and re-select the file.',
+          })
+        );
+        inFlightRef.current.delete(clientEntryId);
+        await refreshUploadState();
+        return;
+      }
       if (!signResponse.ok) {
         const body = (await signResponse.json().catch(() => null)) as { error?: string } | null;
         setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: body?.error || 'File not accepted. You can retry.' }));
@@ -215,12 +218,18 @@ export function UploadClient({ token }: UploadClientProps) {
         return;
       }
       const { uploadUrl, storageObjectKey } = (await signResponse.json()) as { uploadUrl: string; storageObjectKey: string };
-      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signed', storageObjectKey, signedUploadUrl: uploadUrl }));
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signed', storageObjectKey, signedUploadUrl: uploadUrl, message: undefined }));
       inFlightRef.current.delete(clientEntryId);
       await refreshUploadState();
       await uploadEntry(clientEntryId, { storageObjectKey, signedUploadUrl: uploadUrl });
     } catch {
-      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while requesting an upload slot. You can retry -- this will not create a duplicate.' }));
+      // R6 (§1): the response may have been lost even though the
+      // server-side reservation committed -- this entry stays
+      // recoverable, WITHOUT a storageObjectKey, and "Retry upload
+      // request" (this same function) is the way back in, reusing
+      // the identical reservationKey so the server-side idempotent
+      // reservation (R5 §6) is what actually resolves the ambiguity.
+      setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while requesting an upload slot. Retry uses the same reservation -- it will not create a duplicate or consume extra quota.' }));
       inFlightRef.current.delete(clientEntryId);
       await refreshUploadState();
     }
@@ -245,7 +254,13 @@ export function UploadClient({ token }: UploadClientProps) {
         body: entry.file,
       });
       if (!putResponse.ok) {
-        setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Upload failed. You can retry without losing your place.' }));
+        // R6 (§4): the signed URL itself may have expired -- offer
+        // both "retry the same PUT" (handled by rendering, since
+        // signedUploadUrl/storageObjectKey are both still known) and
+        // "request a fresh URL" (re-runs signAndUpload with the SAME
+        // reservationKey, which the server resolves to the identical
+        // reservation and simply reissues a new signed URL for it).
+        setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Upload failed. You can retry, or request a fresh upload link if this one may have expired -- neither loses your place.' }));
         inFlightRef.current.delete(clientEntryId);
         await refreshUploadState();
         return;
@@ -301,21 +316,39 @@ export function UploadClient({ token }: UploadClientProps) {
     }
   }
 
+  /**
+   * R6 (§2): NEVER silently removes an entry whose server-side state
+   * is ambiguous. An entry with a known storageObjectKey is cancelled
+   * on the server as before. An entry with NO storageObjectKey but
+   * that HAS been submitted for signing (reservationKey exists and it
+   * is not still 'pending') cannot be safely removed locally -- its
+   * sign attempt may have committed a reservation the browser never
+   * learned the object key for. Only a genuinely never-submitted
+   * 'pending' entry, or one already in the explicit 'terminal' phase,
+   * is ever removed purely locally.
+   */
   async function cancelEntry(clientEntryId: string) {
     if (inFlightRef.current.has(clientEntryId) || finalized) return;
-    inFlightRef.current.add(clientEntryId);
     const entry = findEntryById(entriesRef.current, clientEntryId);
-    if (!entry) {
-      inFlightRef.current.delete(clientEntryId);
-      return;
-    }
+    if (!entry) return;
+
     if (!entry.storageObjectKey) {
-      setEntries((prev) => removeEntryById(prev, clientEntryId));
-      inFlightRef.current.delete(clientEntryId);
+      if (entry.phase === 'pending' || entry.phase === 'terminal') {
+        setEntries((prev) => removeEntryById(prev, clientEntryId));
+        return;
+      }
+      // R6 (§2): an ambiguous, already-submitted entry with no known
+      // object key -- do not remove it. Refreshing state is the only
+      // safe action here; if the server did commit a reservation,
+      // reconciliation will surface it (with its object key) as a
+      // recovered entry the customer can then Verify or Cancel
+      // normally, or the customer can use "Retry upload request"
+      // (signAndUpload) to resolve the ambiguity directly.
+      await refreshUploadState();
       return;
     }
-    // R5 (§3 UI): a visible cancelling phase, which counts as "busy"
-    // and therefore blocks Finish while the request is in flight.
+
+    inFlightRef.current.add(clientEntryId);
     setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'cancelling' }));
     try {
       const response = await fetch(`/api/upload/${encodeURIComponent(token)}/cancel`, {
@@ -415,9 +448,14 @@ export function UploadClient({ token }: UploadClientProps) {
             <span className="text-sm text-gray-700 truncate">{entry.filename}</span>
             <span className="text-xs flex items-center gap-2 shrink-0">
               {entry.phase === 'pending' && !finalized && (
-                <button onClick={() => signAndUpload(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
-                  Upload
-                </button>
+                <>
+                  <button onClick={() => signAndUpload(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
+                    Upload
+                  </button>
+                  <button onClick={() => cancelEntry(entry.clientEntryId)} className="text-gray-400 underline" type="button">
+                    Remove
+                  </button>
+                </>
               )}
               {(entry.phase === 'signing' || entry.phase === 'uploading' || entry.phase === 'verifying') && (
                 <span className="text-gray-500">Working…</span>
@@ -426,14 +464,50 @@ export function UploadClient({ token }: UploadClientProps) {
               {entry.phase === 'completed' && <span className="text-green-600">Received</span>}
               {entry.phase === 'rejected' && <span className="text-red-600">{entry.message}</span>}
               {entry.phase === 'cancelled' && <span className="text-gray-400">Cancelled</span>}
-              {(entry.phase === 'uploaded_unverified' || entry.phase === 'recoverable_error') && !finalized && (
+              {entry.phase === 'terminal' && !finalized && (
+                <>
+                  <span className="text-red-600">{entry.message}</span>
+                  <button onClick={() => cancelEntry(entry.clientEntryId)} className="text-gray-600 underline" type="button">
+                    Remove and re-select
+                  </button>
+                </>
+              )}
+              {entry.phase === 'recoverable_error' && !finalized && !entry.storageObjectKey && (
+                <>
+                  {/* R6 §1/§2/§4: a lost/failed sign response with no object key yet -- the ONLY safe recovery is retrying the SAME reservation, or refreshing to see if the server actually already has it. No silent local cancel. */}
+                  <span className="text-amber-600">{entry.message || 'Not yet confirmed.'}</span>
+                  <button onClick={() => signAndUpload(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
+                    Retry upload request
+                  </button>
+                  <button onClick={() => refreshUploadState()} className="text-gray-600 underline" type="button">
+                    Refresh state
+                  </button>
+                </>
+              )}
+              {entry.phase === 'recoverable_error' && !finalized && entry.storageObjectKey && (
                 <>
                   <span className="text-amber-600">{entry.message || 'Not yet confirmed.'}</span>
-                  {entry.phase === 'recoverable_error' && entry.file && entry.signedUploadUrl && (
+                  {entry.file && entry.signedUploadUrl && (
                     <button onClick={() => uploadEntry(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
                       Retry upload
                     </button>
                   )}
+                  {entry.file && entry.reservationKey && (
+                    <button onClick={() => signAndUpload(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
+                      Request fresh upload URL
+                    </button>
+                  )}
+                  <button onClick={() => verifyEntry(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
+                    Verify
+                  </button>
+                  <button onClick={() => cancelEntry(entry.clientEntryId)} className="text-red-600 underline" type="button">
+                    Cancel
+                  </button>
+                </>
+              )}
+              {entry.phase === 'uploaded_unverified' && !finalized && (
+                <>
+                  <span className="text-amber-600">{entry.message || 'Not yet confirmed.'}</span>
                   {entry.storageObjectKey && (
                     <button onClick={() => verifyEntry(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
                       Verify

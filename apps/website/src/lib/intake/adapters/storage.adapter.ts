@@ -132,10 +132,17 @@ export function createFakeStorageAdapter(): StorageAdapter & {
     simulatedDeleteFailures,
     async createSignedUploadUrl(objectKey: string): Promise<SignedUploadUrl> {
       signedUrlCalls.push(objectKey);
+      const fakeToken = `fake-token-${signedUrlCalls.length}`;
       return {
-        uploadUrl: `https://fake-storage.test/upload/${objectKey}`,
+        // R6: the token is embedded in the URL (as it would be for a
+        // real Supabase signed upload URL) so that two calls for the
+        // SAME object key -- e.g. an original sign and a same-key
+        // retry after a lost response -- return genuinely DIFFERENT
+        // URLs, matching real provider behavior; only storageObjectKey
+        // is expected to be identical across such calls.
+        uploadUrl: `https://fake-storage.test/upload/${objectKey}?token=${fakeToken}`,
         storageObjectKey: objectKey,
-        token: `fake-token-${signedUrlCalls.length}`,
+        token: fakeToken,
       };
     },
     async verifyObjectExists(objectKey: string) {

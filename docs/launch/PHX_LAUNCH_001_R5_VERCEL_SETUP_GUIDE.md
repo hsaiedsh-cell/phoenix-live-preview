@@ -2,11 +2,11 @@
 
 Supersedes nothing structurally in the R2–R4 setup guide corrections
 (connection mode, `ALLOWED_PREVIEW_ORIGINS`, Turnstile hostname/action
-variables), all of which remain accurate and unchanged. This addendum adds
-one new required environment variable and restates the Section 12
-live-provider Go/No-Go list, since R5 adds several items.
+variables), all of which remain accurate and unchanged. **No new
+environment variable was introduced in R5.** This addendum restates the
+Section 12 live-provider Go/No-Go list, since R5 adds several items.
 
-## 1. New environment variable: none required, but one column requires the migration to be re-run if already applied elsewhere
+## 1. Schema-only change: no new environment variable
 
 R5 adds `reservation_key_hash` to `public_intake_files` and a matching
 partial unique index. No new environment variable is introduced. As

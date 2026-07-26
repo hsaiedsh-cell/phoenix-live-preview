@@ -248,6 +248,7 @@ CREATE TABLE public_intake_events (
     'request.status_changed',
     'request.upload_session_created',
     'request.upload_invited',
+    'request.upload_session_reissued',
     'request.upload_invite_email_sent',
     'request.upload_invite_email_failed',
     'request.upload_session_revoked',
@@ -270,6 +271,7 @@ CREATE TABLE public_intake_events (
     'upload.completion_verified',
     'upload.finalization_rejected_zero_files',
     'upload.finalization_denied_request_state',
+    'upload.finalization_denied_pending_reservations',
     'upload.session_finalized',
     'upload.reservation_cancelled',
     'upload.cancellation_denied',
@@ -383,6 +385,15 @@ CREATE TABLE public_intake_files (
   scan_status             TEXT NOT NULL DEFAULT 'pending_review',
   created_at              TIMESTAMPTZ NOT NULL DEFAULT now(),
   completed_at            TIMESTAMPTZ NULL,
+  -- R5 (§6): hash of a client-generated, per-file-entry reservation
+  -- key (never the raw key itself). Nullable because sign requests
+  -- issued before this revision (none exist yet -- never applied to
+  -- hosted Supabase) had no such key; every NEW sign request always
+  -- supplies one. Bound to (upload_session_id, reservation_key_hash)
+  -- via the unique index below, which is the entire mechanism that
+  -- makes a same-key sign retry idempotent -- see
+  -- upload-flow.service.ts's signUploadObject.
+  reservation_key_hash    TEXT NULL,
 
   CONSTRAINT chk_intake_files_declared_content_type CHECK (declared_content_type IN (
     'application/pdf',
@@ -425,6 +436,16 @@ CREATE TABLE public_intake_files (
 
 CREATE UNIQUE INDEX uq_intake_files_storage_object_key
   ON public_intake_files (storage_object_key);
+
+-- R5 (§6): partial unique index (only when a key was actually
+-- supplied) -- a same (upload_session_id, reservation_key_hash) pair
+-- can only ever match ONE row, which is what lets signUploadObject
+-- treat a retried sign request (same client-generated key) as "reuse
+-- this reservation", not "create a second one, consuming quota
+-- again".
+CREATE UNIQUE INDEX uq_intake_files_session_reservation_key
+  ON public_intake_files (upload_session_id, reservation_key_hash)
+  WHERE reservation_key_hash IS NOT NULL;
 
 CREATE INDEX idx_intake_files_request_id
   ON public_intake_files (request_id);

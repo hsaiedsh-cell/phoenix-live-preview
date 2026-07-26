@@ -86,6 +86,34 @@ export async function findActiveSessionForRequestInTransaction(
   return rows[0] ?? null;
 }
 
+/**
+ * R5 (§1): locks any 'active'-status session for this request FOR
+ * UPDATE, and if it has already crossed expires_at (no cleanup run
+ * has touched it yet), atomically marks it 'expired' right here --
+ * closing exactly the gap the addendum describes ("expired session
+ * then reissue succeeds without requiring a separate cleanup run").
+ * Returns the session only if it is genuinely active AND unexpired;
+ * returns null in every other case (no active session at all, or one
+ * that was just expired by this very call), meaning the caller is
+ * free to issue a replacement.
+ */
+export async function lockAndExpireIfStaleActiveSessionInTransaction(
+  query: TransactionQuery,
+  requestId: string
+): Promise<UploadSessionRow | null> {
+  const rows = await query<UploadSessionRow>(
+    `SELECT * FROM public_upload_sessions WHERE request_id = $1 AND status = 'active' FOR UPDATE`,
+    [requestId]
+  );
+  const session = rows[0];
+  if (!session) return null;
+  if (session.expires_at.getTime() <= Date.now()) {
+    await query(`UPDATE public_upload_sessions SET status = 'expired' WHERE id = $1 AND status = 'active'`, [session.id]);
+    return null;
+  }
+  return session;
+}
+
 export async function createUploadSession(requestId: string, tokenHash: string): Promise<UploadSessionRow> {
   const existingActive = await findActiveSessionForRequest(requestId);
   if (existingActive) {

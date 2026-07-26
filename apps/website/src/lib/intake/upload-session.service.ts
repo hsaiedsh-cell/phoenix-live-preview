@@ -31,36 +31,62 @@ export type IssueUploadSessionOutcome =
   | { kind: 'session_already_active' }
   | { kind: 'ok'; expiresAt: Date; emailSent: boolean };
 
+/**
+ * R5 (§1): supports both the initial invitation (under_review ->
+ * upload_invited) and a REPLACEMENT invitation (upload_invited, no
+ * usable active session remaining -- the prior one was revoked or
+ * has expired) without a fake upload_invited -> upload_invited
+ * transition. Everything happens inside one transaction: the parent
+ * request row is locked FOR UPDATE first, then any existing 'active'
+ * session is locked and, if already past expires_at, atomically
+ * expired right there (closing the gap where an expired-but-not-yet-
+ * cleaned-up session permanently blocked reissue). A genuinely
+ * active, unexpired session still blocks with session_already_active,
+ * exactly as before.
+ */
 export async function issueUploadSession(requestId: string): Promise<IssueUploadSessionOutcome> {
-  const existing = await intakeRequestsRepo.findById(requestId);
-  if (!existing) return { kind: 'not_found' };
-
-  if (!intakeRequestsRepo.isAllowedStatusTransition(existing.status, 'upload_invited')) {
-    return { kind: 'invalid_transition', from: existing.status };
-  }
-
   const rawToken = generateRawUploadToken();
 
   const transactionResult = await withIntakeTransaction(async (query) => {
-    // Re-check inside the transaction (TOCTOU-safe): the earlier
-    // findById above is only used for the cheap not_found/invalid_transition
-    // pre-checks; the authoritative check is this one.
-    const alreadyActive = await uploadSessionsRepo.findActiveSessionForRequestInTransaction(query, requestId);
-    if (alreadyActive) {
+    const lockedRequest = await intakeRequestsRepo.lockRequestForUpdate(query, requestId);
+    if (!lockedRequest) return { kind: 'not_found' as const };
+
+    const isInitial = lockedRequest.status === 'under_review';
+    const isReplacement = lockedRequest.status === 'upload_invited';
+    if (!isInitial && !isReplacement) {
+      return { kind: 'invalid_transition' as const, from: lockedRequest.status };
+    }
+
+    const stillUsableActiveSession = await uploadSessionsRepo.lockAndExpireIfStaleActiveSessionInTransaction(query, requestId);
+    if (stillUsableActiveSession) {
       return { kind: 'session_already_active' as const };
     }
-    const updated = await intakeRequestsRepo.updateStatusInTransaction(query, requestId, existing.status, 'upload_invited');
-    if (!updated) {
-      return { kind: 'invalid_transition' as const, from: existing.status };
+
+    if (isInitial) {
+      const updated = await intakeRequestsRepo.updateStatusInTransaction(query, requestId, lockedRequest.status, 'upload_invited');
+      if (!updated) {
+        return { kind: 'invalid_transition' as const, from: lockedRequest.status };
+      }
+      await eventsRepo.recordEventInTransaction(query, requestId, 'request.status_changed', {
+        from: lockedRequest.status,
+        to: 'upload_invited',
+      });
+    } else {
+      // R5 (§1): replacement -- no fake same-status transition. A
+      // dedicated core event marks this specifically as a reissue,
+      // distinct from the initial invitation.
+      await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_reissued');
     }
-    await eventsRepo.recordEventInTransaction(query, requestId, 'request.status_changed', {
-      from: existing.status,
-      to: 'upload_invited',
-    });
+
     const session = await uploadSessionsRepo.createUploadSessionInTransaction(query, requestId, tokenHash(rawToken));
     await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_created');
     await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_invited');
-    return { kind: 'ok' as const, session, publicReference: updated.public_reference, workEmail: updated.work_email_normalized };
+    return {
+      kind: 'ok' as const,
+      session,
+      publicReference: lockedRequest.public_reference,
+      workEmail: lockedRequest.work_email_normalized,
+    };
   });
 
   if (transactionResult.kind !== 'ok') {
@@ -76,6 +102,9 @@ export async function issueUploadSession(requestId: string): Promise<IssueUpload
     expiresAt: session.expires_at,
   });
   email.to = workEmail;
+  // Already per-session (not per-request) -- a replacement session
+  // gets its own distinct provider idempotency key, since it is a
+  // different session.id (R5 §1's own QA proves this explicitly).
   email.idempotencyKey = `upload-invitation/${session.id}`;
   const sendResult = await sendEmailSafely(email);
   await recordPostCommitEvent(

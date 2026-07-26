@@ -38,6 +38,19 @@ export function idempotencyKeyHash(idempotencyKey: string, secret?: string): str
 }
 
 /**
+ * R5 (§6): hashes a client-generated, per-file-entry reservation key.
+ * The raw key itself is never stored or logged -- only this hash,
+ * bound to (upload_session_id, reservation_key_hash) via a unique
+ * database index (see the migration). This is what lets
+ * signUploadObject treat a same-key retry (e.g. after the browser
+ * lost the first sign response) as "reuse this reservation" rather
+ * than creating a second one and consuming additional quota.
+ */
+export function reservationKeyHash(reservationKey: string, secret?: string): string {
+  return hmacHash(reservationKey, secret);
+}
+
+/**
  * R1 (§2.1): binds idempotent replay to a fingerprint of the "safe
  * matching fields" — normalized email + request type — so the same
  * client-supplied idempotency key cannot be replayed against a

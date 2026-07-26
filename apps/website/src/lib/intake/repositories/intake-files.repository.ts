@@ -30,6 +30,7 @@ export interface IntakeFileRow {
   scan_status: 'pending_review' | 'cleared' | 'quarantined';
   created_at: Date;
   completed_at: Date | null;
+  reservation_key_hash: string | null;
 }
 
 export interface LockedSessionRow {
@@ -100,12 +101,13 @@ export async function insertReservation(
     originalFilename: string;
     declaredContentType: string;
     declaredSizeBytes: number;
+    reservationKeyHash: string | null;
   }
 ): Promise<IntakeFileRow> {
   const rows = await query<IntakeFileRow>(
     `INSERT INTO public_intake_files
-       (request_id, upload_session_id, storage_object_key, original_filename, declared_content_type, declared_size_bytes, reservation_status)
-     VALUES ($1, $2, $3, $4, $5, $6, 'reserved')
+       (request_id, upload_session_id, storage_object_key, original_filename, declared_content_type, declared_size_bytes, reservation_status, reservation_key_hash)
+     VALUES ($1, $2, $3, $4, $5, $6, 'reserved', $7)
      RETURNING *`,
     [
       input.requestId,
@@ -114,6 +116,7 @@ export async function insertReservation(
       input.originalFilename,
       input.declaredContentType,
       input.declaredSizeBytes,
+      input.reservationKeyHash,
     ]
   );
   return rows[0];
@@ -179,6 +182,35 @@ export async function countCompletedForSessionInTransaction(query: TransactionQu
     [uploadSessionId]
   );
   return Number(rows[0]?.cnt ?? 0);
+}
+
+/** R5 (§3): the authoritative reserved-row count inside the finalization transaction -- finalization must never proceed while this is > 0. */
+export async function countReservedForSessionInTransaction(query: TransactionQuery, uploadSessionId: string): Promise<number> {
+  const rows = await query<{ cnt: string }>(
+    `SELECT count(*) AS cnt FROM public_intake_files WHERE upload_session_id = $1 AND reservation_status = 'reserved'`,
+    [uploadSessionId]
+  );
+  return Number(rows[0]?.cnt ?? 0);
+}
+
+/**
+ * R5 (§6): locks (FOR UPDATE) the existing reservation for this
+ * session+key, if any -- the entire mechanism behind a same-key sign
+ * retry reusing the original reservation instead of creating a
+ * second one. Always called inside the SAME transaction as the
+ * session lock (session, then this), matching the lock order used
+ * everywhere else in this file.
+ */
+export async function lockReservationByKeyHashForUpdate(
+  query: TransactionQuery,
+  uploadSessionId: string,
+  reservationKeyHash: string
+): Promise<IntakeFileRow | null> {
+  const rows = await query<IntakeFileRow>(
+    `SELECT * FROM public_intake_files WHERE upload_session_id = $1 AND reservation_key_hash = $2 FOR UPDATE`,
+    [uploadSessionId, reservationKeyHash]
+  );
+  return rows[0] ?? null;
 }
 
 /**
@@ -313,12 +345,14 @@ export interface OrphanReservationRow extends IntakeFileRow {
 
 /**
  * Reservations that are still 'reserved' but whose parent upload
- * session has already expired (customer never completed the
- * upload), plus rows already marked 'failed' or 'cancelled' --
- * cancellation (R4 §2.3) attempts a best-effort provider deletion at
- * cancel time, but if that deletion failed, the row's provider
- * object may still exist and must remain discoverable here so a
- * later cleanup pass retries it. Never includes 'completed' rows --
+ * session is no longer usable -- revoked, used (finalized), or
+ * expired (either by status or because expires_at has passed even
+ * if no cleanup run has flipped the status column yet) -- plus rows
+ * already marked 'failed' or 'cancelled'. R5 (§3): previously this
+ * only caught a still-'active' session past its expires_at; a
+ * reserved row left behind by a REVOKED or USED session was invisible
+ * here until expires_at eventually passed too, even though it was
+ * already unambiguously abandoned. Never includes 'completed' rows --
  * completed customer files are never touched by cleanup.
  */
 export async function findOrphanReservations(): Promise<OrphanReservationRow[]> {
@@ -331,7 +365,10 @@ export async function findOrphanReservations(): Promise<OrphanReservationRow[]> 
      FROM public_intake_files f
      JOIN public_upload_sessions s ON s.id = f.upload_session_id
      WHERE f.reservation_status IN ('failed', 'cancelled')
-        OR (f.reservation_status = 'reserved' AND s.expires_at < now())
+        OR (f.reservation_status = 'reserved' AND (
+              s.status IN ('revoked', 'used', 'expired')
+              OR s.expires_at < now()
+            ))
      ORDER BY f.created_at ASC`
   );
 }

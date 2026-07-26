@@ -55,6 +55,12 @@ export async function POST(
       case 'completion_denied':
         logIntakeEvent({ requestId, route, outcome: `completion_denied_${outcome.reason}`, statusCode: 422 });
         return genericErrorResponse(422, 'We could not verify that file. Please try again.', requestId);
+      case 'pending_reservations':
+        logIntakeEvent({ requestId, route, outcome: 'pending_reservations', statusCode: 409 });
+        return NextResponse.json(
+          { error: 'Please verify or cancel your other pending files before finishing.', fileCount: outcome.fileCount, reservedCount: outcome.reservedCount, requestId },
+          { status: 409 }
+        );
       case 'ok':
         logIntakeEvent({ requestId, route, outcome: 'ok', statusCode: 200 });
         return NextResponse.json({ fileCount: outcome.fileCount, finalized: outcome.finalized, requestId }, { status: 200 });

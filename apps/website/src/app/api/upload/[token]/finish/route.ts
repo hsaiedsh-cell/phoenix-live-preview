@@ -51,6 +51,13 @@ export async function POST(
   try {
     const outcome = await finishUploadSession(token);
     if (!outcome.ok) {
+      if (outcome.reason === 'pending_reservations') {
+        logIntakeEvent({ requestId, route, outcome: 'pending_reservations', statusCode: 409 });
+        return NextResponse.json(
+          { error: 'Please verify or cancel your other pending files before finishing.', fileCount: outcome.fileCount, reservedCount: outcome.reservedCount, requestId },
+          { status: 409 }
+        );
+      }
       logIntakeEvent({ requestId, route, outcome: 'not_finalized', statusCode: 422 });
       return genericErrorResponse(422, 'Could not finish this upload session. Please make sure at least one file has completed.', requestId);
     }

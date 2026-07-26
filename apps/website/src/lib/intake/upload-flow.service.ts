@@ -1,46 +1,41 @@
 // ============================================================
-// Upload flow service -- token validation, reservation-based
+// Upload flow service -- token validation, idempotent reservation
 // signing, atomically-revalidated completion/finalization,
 // cancellation, and authoritative state reporting
-// PHX-LAUNCH-001 (R4: PHX-LAUNCH-001-R4 §1, §2, §3, §4)
+// PHX-LAUNCH-001 (R5: PHX-LAUNCH-001-R5 §2, §3, §6)
 // ------------------------------------------------------------
 // Backs GET /api/upload/:token, POST /api/upload/:token/sign,
-// POST /api/upload/:token/complete, and POST /api/upload/:token/cancel
-// (new in R4). Public but invitation-only: anonymous callers without
-// a valid token are always denied.
+// POST /api/upload/:token/complete, and POST /api/upload/:token/cancel.
+// Public but invitation-only: anonymous callers without a valid token
+// are always denied.
 //
-// R4 correction summary:
-//  - §1: checkUploadToken now returns the full authoritative state
-//    contract (counts/bytes/pending reservations) the addendum
-//    requires, computed from intake-files.repository.ts's
-//    getSessionStateSummary -- never database UUIDs, request UUID,
-//    token hash, email, message, or IP hash.
-//  - §2: a new cancelUploadReservation lets the token holder release
-//    a still-`reserved` object's quota (mark 'cancelled', best-effort
-//    provider deletion after commit). Completed reservations can
-//    never be cancelled; a duplicate cancel is idempotent.
-//  - §3: maybeFinalizeInTransaction now ALWAYS returns the
-//    authoritative completedCount computed inside the same
-//    transaction that completed the reservation and/or finalized the
-//    session. completeUploadObject and finishUploadSession no longer
-//    issue a separate post-commit countCompletedForSession query to
-//    build their success response -- a post-commit pool/query
-//    failure can therefore never turn an already-committed completion
-//    into an HTTP 500.
-//  - §4: every OBSERVATIONAL event (token accepted/denied, file
-//    rejected, object signed, reservation signing failed, completion
-//    denied) now goes through recordPostCommitEvent (never throws).
-//    upload.reservation_created moved INSIDE the sign transaction
-//    (it is a CORE event proving reservation state, per the
-//    addendum's classification) -- previously it was recorded after
-//    commit with a plain, throwable call, which is exactly the "most
-//    serious path" failure mode the addendum describes: a failed
-//    event insert could 500 a request whose reservation had already
-//    committed and already consumed quota, without ever returning the
-//    signed URL.
+// R5 correction summary:
+//  - §2: the upload-complete email's provider idempotency key now
+//    uses the UPLOAD SESSION id, not the request id -- carried out of
+//    the finalization transaction alongside completedCount. Once R5
+//    §1 allows replacement sessions for the same request, a second
+//    legitimate session's completion notification must not be
+//    suppressed by the provider as a duplicate of the first session's.
+//  - §3: maybeFinalizeInTransaction now also counts RESERVED rows
+//    inside the same transaction and refuses to finalize at all while
+//    any remain -- a recovered uploaded_unverified/recoverable_error
+//    reservation is not "busy" from the UI's point of view, so
+//    without this server-side check a customer could finalize while
+//    files were still stuck mid-flight, orphaning them the moment the
+//    token became unusable.
+//  - §6: signUploadObject now takes a client-generated reservationKey
+//    or reuses the caller-visible object key of an existing
+//    reservation for the same (session, key) pair -- a lost sign
+//    response followed by a client retry reuses the SAME reservation
+//    and issues a fresh signed URL for the SAME object key, rather
+//    than creating a second reservation and consuming additional
+//    quota. A same key presented with different file metadata is a
+//    conflict; a same key referencing an already-completed/cancelled/
+//    failed/expired reservation is an explicit terminal result, never
+//    a silent second insert.
 // ============================================================
 
-import { tokenHash } from './hash';
+import { tokenHash, reservationKeyHash as hashReservationKey } from './hash';
 import * as uploadSessionsRepo from './repositories/upload-sessions.repository';
 import * as intakeFilesRepo from './repositories/intake-files.repository';
 import * as eventsRepo from './repositories/intake-events.repository';
@@ -85,7 +80,6 @@ export async function checkUploadToken(rawToken: string): Promise<TokenCheckOutc
       used: 'upload.token_denied_used',
     } as const;
     if (session) {
-      // R4 (§4): observational, best-effort -- must never throw.
       await recordPostCommitEvent(session.request_id, eventByReason[validity.reason], { route: 'checkUploadToken' });
     }
     return { kind: 'denied', reason: validity.reason };
@@ -119,12 +113,14 @@ export type SignUploadOutcome =
       kind: 'rejected';
       reason: 'file_count_exceeded' | 'total_size_exceeded' | 'per_file_size_exceeded' | 'content_type_not_allowed' | 'extension_not_allowed';
     }
+  | { kind: 'reservation_conflict' }
+  | { kind: 'reservation_terminal'; status: 'completed' | 'cancelled' | 'failed' | 'expired' }
   | { kind: 'signing_failed' }
   | { kind: 'ok'; uploadUrl: string; storageObjectKey: string };
 
 const ALLOWED_CONTENT_TYPES = UPLOAD_LIMITS.allowedContentTypes as readonly string[];
 
-/** R3 (§2)/R4: the single revalidation rule shared by every locked-transaction check in this file -- status/expiry/revocation/finalization, all four, always together. Exported so QA can prove this SPECIFIC check independently. */
+/** R3 (§2)/R4/R5: the single revalidation rule shared by every locked-transaction check in this file -- status/expiry/revocation/finalization, all four, always together. Exported so QA can prove this SPECIFIC check independently. */
 export function isLockedSessionStillValid(lockedSession: { status: string; expires_at: Date; revoked_at: Date | null; finalized_at: Date | null }): boolean {
   return (
     lockedSession.status === 'active' &&
@@ -134,9 +130,20 @@ export function isLockedSessionStillValid(lockedSession: { status: string; expir
   );
 }
 
+function fingerprintMatches(
+  reservation: { original_filename: string; declared_content_type: string; declared_size_bytes: number },
+  candidate: { filename: string; contentType: string; sizeBytes: number }
+): boolean {
+  return (
+    reservation.original_filename === candidate.filename &&
+    reservation.declared_content_type === candidate.contentType &&
+    reservation.declared_size_bytes === candidate.sizeBytes
+  );
+}
+
 export async function signUploadObject(
   rawToken: string,
-  candidate: { filename: string; contentType: string; sizeBytes: number }
+  candidate: { filename: string; contentType: string; sizeBytes: number; reservationKey: string }
 ): Promise<SignUploadOutcome> {
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
@@ -163,35 +170,56 @@ export async function signUploadObject(
     return { kind: 'rejected', reason: 'per_file_size_exceeded' };
   }
 
-  // R4 (§4): upload.reservation_created is CORE -- written inside the
-  // SAME transaction that inserts the reservation, never after
-  // commit. This is the exact "most serious path" the addendum
-  // describes: an R2/R3-era post-commit event failure here could 500
-  // a request whose reservation had already committed and already
-  // consumed quota, without the customer ever receiving the signed URL.
+  const keyHash = hashReservationKey(candidate.reservationKey);
+
+  // R5 (§6): ONE short transaction that locks the session, then looks
+  // up any EXISTING reservation for this exact (session, key) pair --
+  // never a separate pre-check -- so a truly concurrent pair of
+  // same-key sign requests (e.g. a double-click) is resolved the same
+  // way a single retry is: only one of them ever inserts a new row.
   const reservationResult = await withIntakeTransaction(async (query) => {
     const lockedSession = await intakeFilesRepo.lockUploadSessionForUpdate(query, validity.session.id);
     if (!lockedSession || !isLockedSessionStillValid(lockedSession)) {
       return { kind: 'denied' as const, reason: 'invalid' as const };
     }
-    const totals = await intakeFilesRepo.getReservationTotalsForUpdate(query, validity.session.id);
+
+    const existing = await intakeFilesRepo.lockReservationByKeyHashForUpdate(query, lockedSession.id, keyHash);
+    if (existing) {
+      if (existing.reservation_status !== 'reserved') {
+        return { kind: 'terminal' as const, status: existing.reservation_status as 'completed' | 'cancelled' | 'failed' | 'expired' };
+      }
+      if (!fingerprintMatches(existing, candidate)) {
+        return { kind: 'conflict' as const };
+      }
+      // R5 (§6) item 1: same session + same key + same fingerprint +
+      // still 'reserved' -- reuse the existing reservation. No quota
+      // check, no new row, no new upload.reservation_created event
+      // (only the first claim ever inserts that).
+      return { kind: 'reuse' as const, reservation: existing };
+    }
+
+    const totals = await intakeFilesRepo.getReservationTotalsForUpdate(query, lockedSession.id);
     if (totals.reservedOrCompletedCount + 1 > lockedSession.max_files) {
       return { kind: 'rejected' as const, reason: 'file_count_exceeded' as const };
     }
     if (totals.reservedOrCompletedTotalBytes + candidate.sizeBytes > lockedSession.max_total_size_bytes) {
       return { kind: 'rejected' as const, reason: 'total_size_exceeded' as const };
     }
-    const objectKey = generateStorageObjectKey(validity.session.id);
+    const objectKey = generateStorageObjectKey(lockedSession.id);
     const reservation = await intakeFilesRepo.insertReservation(query, {
       requestId: validity.session.request_id,
-      uploadSessionId: validity.session.id,
+      uploadSessionId: lockedSession.id,
       storageObjectKey: objectKey,
       originalFilename: candidate.filename,
       declaredContentType: candidate.contentType,
       declaredSizeBytes: candidate.sizeBytes,
+      reservationKeyHash: keyHash,
     });
+    // R5 (§4 recap via §6 item 4): CORE event, written inside this
+    // same transaction -- only the first claim for this key ever
+    // reaches this branch.
     await eventsRepo.recordEventInTransaction(query, validity.session.request_id, 'upload.reservation_created');
-    return { kind: 'ok' as const, reservation };
+    return { kind: 'created' as const, reservation };
   });
 
   if (reservationResult.kind === 'denied') {
@@ -201,21 +229,27 @@ export async function signUploadObject(
     await recordPostCommitEvent(validity.session.request_id, 'upload.file_rejected_size', { route: 'signUploadObject' });
     return { kind: 'rejected', reason: reservationResult.reason };
   }
+  if (reservationResult.kind === 'conflict') {
+    return { kind: 'reservation_conflict' };
+  }
+  if (reservationResult.kind === 'terminal') {
+    return { kind: 'reservation_terminal', status: reservationResult.status };
+  }
 
   const { reservation } = reservationResult;
+  const isReplay = reservationResult.kind === 'reuse';
 
   try {
     const signed = await getStorageAdapter().createSignedUploadUrl(reservation.storage_object_key);
-    // R4 (§4): observational -- must never turn a successfully
-    // signed URL into a failure response.
     await recordPostCommitEvent(validity.session.request_id, 'upload.object_signed', { route: 'signUploadObject' });
     return { kind: 'ok', uploadUrl: signed.uploadUrl, storageObjectKey: signed.storageObjectKey };
   } catch {
-    // The reservation already committed (core, above) -- releasing
-    // its quota on a real provider failure is itself a core state
-    // change, so it stays a direct (not best-effort) call; only the
-    // OBSERVATIONAL event about it is best-effort.
-    await intakeFilesRepo.markReservationFailed(reservation.id);
+    // R5 (§6) item 5: a provider signing failure on a REPLAY must not
+    // corrupt a previously valid reservation -- only a brand-new
+    // reservation's OWN first signing failure marks it 'failed'.
+    if (!isReplay) {
+      await intakeFilesRepo.markReservationFailed(reservation.id);
+    }
     await recordPostCommitEvent(validity.session.request_id, 'upload.reservation_failed', { route: 'signUploadObject' });
     return { kind: 'signing_failed' };
   }
@@ -234,17 +268,19 @@ export type CompleteUploadOutcome =
         | 'extension_mismatch'
         | 'session_revalidation_failed';
     }
-  | { kind: 'ok'; fileCount: number; finalized: boolean };
+  | { kind: 'ok'; fileCount: number; finalized: boolean }
+  | { kind: 'pending_reservations'; fileCount: number; reservedCount: number };
 
 /**
  * Sends the post-commit upload-complete notification. Never throws
- * (R3 §4, unchanged in R4).
+ * (R3 §4). R5 (§2): the provider idempotency key now uses the
+ * UPLOAD SESSION id, not the request id.
  */
-async function sendUploadCompleteNotification(requestId: string, publicReference: string, fileCount: number): Promise<void> {
+async function sendUploadCompleteNotification(requestId: string, uploadSessionId: string, publicReference: string, fileCount: number): Promise<void> {
   try {
     const email = buildUploadCompleteInternalEmail({ publicReference, fileCount });
     email.to = serverConfig.intakeInternalToEmail;
-    email.idempotencyKey = `upload-complete/${requestId}`;
+    email.idempotencyKey = `upload-complete/${uploadSessionId}`;
     const sendResult = await sendEmailSafely(email);
     await recordPostCommitEvent(
       requestId,
@@ -252,21 +288,26 @@ async function sendUploadCompleteNotification(requestId: string, publicReference
       { route: 'upload-complete-notification' }
     );
   } catch {
-    // Defensive only -- see this function's own contract: it never
-    // propagates a failure to its caller.
+    // Defensive only -- see this function's own contract.
   }
 }
 
 type FinalizationTransactionResult =
   | { kind: 'not_finalized'; completedCount: number }
-  | { kind: 'finalized'; requestId: string; publicReference: string; completedCount: number };
+  | { kind: 'pending_reservations'; completedCount: number; reservedCount: number }
+  | { kind: 'finalized'; requestId: string; uploadSessionId: string; publicReference: string; completedCount: number };
 
 /**
- * R3 (§1) + R4 (§3): runs INSIDE the caller's already-open
- * transaction. ALWAYS returns the authoritative completedCount
- * computed in THIS transaction, for both branches -- so
- * completeUploadObject/finishUploadSession never need a separate
- * post-commit query to learn it (R4 §3's required correction).
+ * R3 (§1) + R4 (§3) + R5 (§2, §3): runs INSIDE the caller's
+ * already-open transaction. R5 additionally counts RESERVED rows in
+ * the SAME transaction and refuses to finalize AT ALL while any
+ * remain -- a recovered uploaded_unverified/recoverable_error
+ * reservation looks idle to the UI but is still a real, uncompleted
+ * server-side row; finalizing anyway would orphan it the instant the
+ * token became unusable. This check applies uniformly to both the
+ * explicit-finish and automatic-at-max-count paths -- it is a no-op
+ * for the automatic path, since quota rules make reserved rows
+ * impossible once completedCount has reached max_files.
  */
 async function maybeFinalizeInTransaction(
   query: TransactionQuery,
@@ -278,6 +319,13 @@ async function maybeFinalizeInTransaction(
   if (!requestFinish && !reachedMax) {
     return { kind: 'not_finalized', completedCount };
   }
+
+  const reservedCount = await intakeFilesRepo.countReservedForSessionInTransaction(query, lockedSession.id);
+  if (reservedCount > 0) {
+    await eventsRepo.recordEventInTransaction(query, lockedSession.request_id, 'upload.finalization_denied_pending_reservations');
+    return { kind: 'pending_reservations', completedCount, reservedCount };
+  }
+
   if (completedCount < 1) {
     await eventsRepo.recordEventInTransaction(query, lockedSession.request_id, 'upload.finalization_rejected_zero_files');
     return { kind: 'not_finalized', completedCount };
@@ -300,7 +348,13 @@ async function maybeFinalizeInTransaction(
     throw new Error('request_finalization_update_returned_no_row_after_lock');
   }
   await eventsRepo.recordEventInTransaction(query, updatedRequest.id, 'request.files_received');
-  return { kind: 'finalized', requestId: updatedRequest.id, publicReference: updatedRequest.public_reference, completedCount };
+  return {
+    kind: 'finalized',
+    requestId: updatedRequest.id,
+    uploadSessionId: lockedSession.id,
+    publicReference: updatedRequest.public_reference,
+    completedCount,
+  };
 }
 
 export async function completeUploadObject(
@@ -324,9 +378,6 @@ export async function completeUploadObject(
     return { kind: 'completion_denied', reason: 'foreign_session' };
   }
 
-  // fetch provider metadata BEFORE opening any transaction -- this is
-  // an external network call and must never happen while a database
-  // connection/transaction is held.
   const verified = await getStorageAdapter().verifyObjectExists(input.storageObjectKey);
   if (!verified) {
     await recordPostCommitEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch', { route: 'completeUploadObject' });
@@ -378,19 +429,28 @@ export async function completeUploadObject(
       await recordPostCommitEvent(validity.session.request_id, 'upload.completion_denied_metadata_mismatch', { route: 'completeUploadObject' });
       return { kind: 'completion_denied', reason: 'extension_mismatch' };
     case 'ok': {
-      // R4 (§3): completedCount comes from INSIDE the transaction
-      // that just committed -- no second, post-commit database query
-      // is issued to construct this response.
+      if (result.finalization.kind === 'pending_reservations') {
+        return { kind: 'pending_reservations', fileCount: result.finalization.completedCount, reservedCount: result.finalization.reservedCount };
+      }
       if (result.finalization.kind === 'finalized') {
-        await sendUploadCompleteNotification(result.finalization.requestId, result.finalization.publicReference, result.finalization.completedCount);
+        await sendUploadCompleteNotification(
+          result.finalization.requestId,
+          result.finalization.uploadSessionId,
+          result.finalization.publicReference,
+          result.finalization.completedCount
+        );
       }
       return { kind: 'ok', fileCount: result.finalization.completedCount, finalized: result.finalization.kind === 'finalized' };
     }
   }
 }
 
-/** Explicit customer "I'm done uploading" action -- also goes through the same atomic revalidate-then-finalize transaction, without completing a new file. `ok` is true only if THIS call actually finalized the session. */
-export async function finishUploadSession(rawToken: string): Promise<{ ok: boolean; fileCount: number }> {
+export type FinishUploadSessionOutcome =
+  | { ok: true; fileCount: number }
+  | { ok: false; fileCount: number; reason?: 'pending_reservations'; reservedCount?: number };
+
+/** Explicit customer "I'm done uploading" action. R5 (§3): refuses while any reservation is still 'reserved'. */
+export async function finishUploadSession(rawToken: string): Promise<FinishUploadSessionOutcome> {
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
   const validity = uploadSessionsRepo.evaluateTokenValidity(session);
@@ -405,13 +465,19 @@ export async function finishUploadSession(rawToken: string): Promise<{ ok: boole
     return { kind: 'ok' as const, finalization };
   });
 
-  // R4 (§3): completedCount always comes from the transaction result,
-  // even in the not-finalized branch -- no post-commit query.
+  if (result.kind === 'ok' && result.finalization.kind === 'pending_reservations') {
+    return { ok: false, fileCount: result.finalization.completedCount, reason: 'pending_reservations', reservedCount: result.finalization.reservedCount };
+  }
   if (result.kind === 'ok' && result.finalization.kind === 'finalized') {
-    await sendUploadCompleteNotification(result.finalization.requestId, result.finalization.publicReference, result.finalization.completedCount);
+    await sendUploadCompleteNotification(
+      result.finalization.requestId,
+      result.finalization.uploadSessionId,
+      result.finalization.publicReference,
+      result.finalization.completedCount
+    );
     return { ok: true, fileCount: result.finalization.completedCount };
   }
-  return { ok: false, fileCount: result.kind === 'ok' ? result.finalization.completedCount : 0 };
+  return { ok: false, fileCount: result.kind === 'ok' && result.finalization.kind === 'not_finalized' ? result.finalization.completedCount : 0 };
 }
 
 export type CancelReservationOutcome =
@@ -419,17 +485,7 @@ export type CancelReservationOutcome =
   | { kind: 'cancellation_denied'; reason: 'unknown_object_key' | 'foreign_session' | 'already_completed' }
   | { kind: 'ok'; cancelled: boolean };
 
-/**
- * R4 (§2.3): releases a still-`reserved` object's quota. Completed
- * reservations can never be cancelled (checked inside the same
- * locked transaction that would otherwise cancel it); a duplicate
- * cancel on an already-cancelled/failed/expired row is idempotent
- * (`cancelled: false`, not an error). Provider deletion is attempted
- * only AFTER commit, best-effort -- a deletion failure leaves the row
- * exactly where the normal orphan-cleanup path already looks for it
- * (see intake-files.repository.ts's findOrphanReservations, which
- * now also matches 'cancelled' rows).
- */
+/** R4 (§2.3): releases a still-`reserved` object's quota. */
 export async function cancelUploadReservation(rawToken: string, storageObjectKey: string): Promise<CancelReservationOutcome> {
   const hash = tokenHash(rawToken);
   const session = await uploadSessionsRepo.findByTokenHash(hash);
@@ -451,7 +507,6 @@ export async function cancelUploadReservation(rawToken: string, storageObjectKey
       return { kind: 'already_completed' as const };
     }
     if (lockedReservation.reservation_status !== 'reserved') {
-      // Already cancelled/failed/expired -- idempotent no-op success.
       return { kind: 'already_terminal' as const };
     }
     const cancelled = await intakeFilesRepo.cancelReservationInTransaction(query, lockedReservation.id);
@@ -474,10 +529,6 @@ export async function cancelUploadReservation(rawToken: string, storageObjectKey
     case 'already_terminal':
       return { kind: 'ok', cancelled: false };
     case 'cancelled': {
-      // Best-effort provider deletion AFTER commit -- a failure here
-      // leaves the row discoverable by ordinary orphan cleanup and
-      // must never turn an already-committed, successful cancel into
-      // an error response.
       try {
         const deleteResult = await getStorageAdapter().deleteObject(storageObjectKey);
         await recordPostCommitEvent(

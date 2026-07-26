@@ -64,6 +64,12 @@ export async function POST(
       case 'rejected':
         logIntakeEvent({ requestId, route, outcome: `rejected_${outcome.reason}`, statusCode: 422 });
         return genericErrorResponse(422, 'This file cannot be accepted.', requestId);
+      case 'reservation_conflict':
+        logIntakeEvent({ requestId, route, outcome: 'reservation_conflict', statusCode: 409 });
+        return genericErrorResponse(409, 'This file entry no longer matches its original selection. Please remove and re-add it.', requestId);
+      case 'reservation_terminal':
+        logIntakeEvent({ requestId, route, outcome: `reservation_terminal_${outcome.status}`, statusCode: 409 });
+        return genericErrorResponse(409, 'This file has already been processed.', requestId);
       case 'signing_failed':
         logIntakeEvent({ requestId, route, outcome: 'signing_failed', statusCode: 503 });
         return genericErrorResponse(503, 'Please try again in a moment.', requestId);

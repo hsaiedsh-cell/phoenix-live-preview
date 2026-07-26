@@ -1,0 +1,37 @@
+# PHX-LAUNCH-001-R7 — Legal Draft Review Notes
+
+## Status: DRAFT. Not legal advice. Not approved for publication. Unchanged from the original sprint, R1, R2, R3, R4, R5, and R6.
+
+This revision (R7) made **no changes** to `apps/website/src/app/privacy/page.tsx`,
+`apps/website/src/app/terms/page.tsx`, or the consent-version constants in
+`apps/website/src/lib/intake/config.ts` — `git diff` between the R7 starting
+HEAD (`bc80cbe`) and the final HEAD confirms all three are untouched (empty
+diff). The two mandatory publishing stops remain fully open:
+
+## 1. "PheonixOPS" spelling — still unresolved
+
+R7's corrections were entirely to duplicate-entry convergence, idempotent
+completion/finish receipts, the minimal finalized token-state response, and
+UI reconciliation of ambiguous outcomes — none of it touches legal page
+content. The mandatory stop stands unchanged:
+
+**Do not publish either page until the owner confirms** whether
+"PheonixOPS" is the intentional legal name (vs. "PhoenixOPS") and confirms
+the legal entity/form behind it.
+
+## 2. UAE governing law / dispute forum — still unresolved
+
+Both drafts still state the placeholder governing-law text with the same
+explicit `[DRAFT PLACEHOLDER — PENDING OWNER CONFIRMATION]` marker and the
+same no-court/emirate/ADGM/DIFC-invented language. R7 did not add, remove,
+or alter this text in any way.
+
+**Do not publish either page until** the owner confirms the exact forum and
+qualified UAE counsel has reviewed the final wording.
+
+## 3. Recommended next step (unchanged)
+
+Route both drafts to qualified UAE counsel alongside the owner's
+confirmation of items 1 and 2 above, exactly as recommended in the original
+review notes and reaffirmed, unchanged, in R1 through R6. R7 does not
+change this recommendation.

@@ -120,29 +120,36 @@ export function stripUrlQueryAndFragment(value: string): string {
 }
 
 /**
- * R4 (§6): the general-purpose version of the above, applied to
+ * R4/R5: the general-purpose version of the above, applied to
  * EVERY string value encountered anywhere during recursive
  * scrubbing (breadcrumb data, span data, tags, nested context
- * values) -- not merely the single, special-cased `event.request.url`
- * field R2/R3 handled. A nested field such as
- * `{ nested: { url: "https://example.test/path?email=customer@example.com" } }`
- * previously survived R3's sanitizer entirely, since only
- * `request.url` itself was ever passed through query/fragment
- * stripping; every other string only got token-path redaction.
- * Absolute URLs are parsed and stripped precisely; a bare
- * absolute-path string (starting with `/`) with a trailing `?`/`#`
- * is also stripped from that point, so genuinely non-URL free text
- * (which matches neither shape) is left untouched.
+ * values, transaction names, span descriptions) -- not merely the
+ * single, special-cased `event.request.url` field R2/R3 handled.
+ *
+ * R5 (§7): Sentry transaction names and span descriptions are
+ * commonly formatted as "METHOD <url-or-path>" (e.g.
+ * "GET /api/upload/[token]/sign?email=..."), which is not itself a
+ * parseable URL -- this sprint's own QA caught that the R4 version
+ * left such strings' query/fragment untouched entirely, since
+ * `new URL(...)` threw immediately on the "GET " prefix and the
+ * bare-path fallback regex requires the string to START with "/".
+ * Now the LAST whitespace-separated token is treated as the
+ * URL-or-path candidate (correct for both "METHOD url" and a bare
+ * url/path with no method prefix at all), stripped, and reattached
+ * to any leading prefix.
  */
 function stripQueryAndFragmentFromAnyUrlLikeString(value: string): string {
+  const spaceIndex = value.lastIndexOf(' ');
+  const prefix = spaceIndex === -1 ? '' : value.slice(0, spaceIndex + 1);
+  const candidate = spaceIndex === -1 ? value : value.slice(spaceIndex + 1);
   try {
-    const url = new URL(value);
+    const url = new URL(candidate);
     url.search = '';
     url.hash = '';
-    return url.toString();
+    return prefix + url.toString();
   } catch {
-    if (/^\/[^\s?#]*[?#]/.test(value)) {
-      return value.split(/[?#]/)[0];
+    if (/^\/[^\s?#]*[?#]/.test(candidate)) {
+      return prefix + candidate.split(/[?#]/)[0];
     }
     return value;
   }
@@ -276,14 +283,15 @@ export function sanitizeSentryEvent<T extends SentryErrorEvent | SentryTransacti
     delete request.data; // request body
     delete request.query_string;
     delete request.cookies;
-    if (request.headers && typeof request.headers === 'object') {
-      const headers = { ...(request.headers as Record<string, unknown>) };
-      delete headers.authorization;
-      delete headers.Authorization;
-      delete headers.cookie;
-      delete headers.Cookie;
-      request.headers = headers;
-    }
+    // R5 (§7): delete the ENTIRE headers bag, not just Authorization/
+    // Cookie -- R4's version kept every other header, which could
+    // still retain X-Forwarded-For, Referer, or a custom sensitive
+    // header under any name. There is no legitimate need for any
+    // request header in a sanitized event.
+    delete request.headers;
+    // R5 (§7): `env` (present on some auto-instrumented Node/Next.js
+    // request events) can carry server environment details.
+    delete request.env;
     if (typeof request.url === 'string') {
       // R2: strip query/fragment entirely, THEN redact any token
       // segment remaining in the path.
@@ -368,7 +376,11 @@ export function sanitizeSentryEvent<T extends SentryErrorEvent | SentryTransacti
   }
 
   if (typeof cloned.transaction === 'string') {
-    cloned.transaction = redactUploadTokenFromUrl(cloned.transaction);
+    // R5 (§7): strip query/fragment first, THEN redact any remaining
+    // token/object-key path segment -- R4's version only did the
+    // latter, so a transaction name like
+    // "GET /api/upload/[token]/sign?email=..." kept its query string.
+    cloned.transaction = redactUploadTokenFromUrl(stripQueryAndFragmentFromAnyUrlLikeString(cloned.transaction));
   }
 
   if (Array.isArray(cloned.breadcrumbs)) {
@@ -389,7 +401,7 @@ export function sanitizeSentryEvent<T extends SentryErrorEvent | SentryTransacti
     cloned.spans = (cloned.spans as Array<Record<string, unknown>>).map((span) => {
       const next = { ...span };
       if (typeof next.description === 'string') {
-        next.description = redactUploadTokenFromUrl(next.description);
+        next.description = redactUploadTokenFromUrl(stripQueryAndFragmentFromAnyUrlLikeString(next.description));
       }
       if (next.data && typeof next.data === 'object') {
         next.data = scrubDataObject(next.data as Record<string, unknown>);

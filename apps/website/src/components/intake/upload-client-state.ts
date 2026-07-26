@@ -131,7 +131,7 @@ export function reconcilePendingReservations(entries: FileEntry[], pendingReserv
 
   const withRecovered = [...merged, ...recovered];
 
-  return withRecovered.filter((entry) => {
+  const afterRemoval = withRecovered.filter((entry) => {
     if (!entry.storageObjectKey) return true; // never signed (or ambiguous/lost response) -- not this reconciliation's concern
     if (pendingByKey.has(entry.storageObjectKey)) return true; // still genuinely pending
     if (entry.file || isEntryBusy(entry)) return true; // a live local relationship or in-flight action is still handling this entry
@@ -141,6 +141,114 @@ export function reconcilePendingReservations(entries: FileEntry[], pendingReserv
     // some other path) and has no local claim on it at all -- remove.
     return false;
   });
+
+  // R7 (§1): a same-key retry after an ambiguous sign response can
+  // leave TWO entries representing one server reservation -- the
+  // original local entry (once its retry succeeds and it learns its
+  // own storageObjectKey directly from the retry response) and the
+  // synthetic recovered entry a PRIOR refresh already added for that
+  // same object key. Collapse them every time reconciliation runs.
+  return collapseDuplicatesByObjectKey(afterRemoval);
+}
+
+/** R7 (§1): the "most advanced" ranking used to decide which phase survives a duplicate-collapse merge -- a completed/cancelled outcome always wins over any in-progress or pending phase, and an in-progress phase always wins over a merely-recovered uploaded_unverified placeholder. */
+const PHASE_RANK: Record<EntryPhase, number> = {
+  pending: 0,
+  rejected: 0,
+  terminal: 0,
+  signing: 1,
+  signed: 2,
+  recoverable_error: 2,
+  uploading: 3,
+  uploaded_unverified: 4,
+  verifying: 5,
+  cancelling: 5,
+  cancelled: 6,
+  completed: 7,
+};
+
+/**
+ * R7 (§1): picks which of several entries representing the SAME
+ * storageObjectKey keeps its identity (clientEntryId) after a
+ * collapse -- required preference order:
+ *   1. a local entry with both a live File and a reservationKey
+ *      (the entry that actually owns the upload/retry relationship)
+ *   2. a local entry with a reservationKey (no File, e.g. a page
+ *      reload lost the File object but the entry was still created
+ *      locally, not purely recovered)
+ *   3. an in-flight (busy) entry (something is actively handling it)
+ *   4. a settled local entry (completed/cancelled/terminal)
+ *   5. the synthetic recovered server entry (clientEntryId starting
+ *      with "server:") -- lowest priority, used only when nothing
+ *      else in the group has any stronger local claim
+ */
+function pickWinner(group: FileEntry[]): FileEntry {
+  const withFileAndKey = group.find((entry) => entry.file && entry.reservationKey);
+  if (withFileAndKey) return withFileAndKey;
+  const withKey = group.find((entry) => entry.reservationKey);
+  if (withKey) return withKey;
+  const busy = group.find((entry) => isEntryBusy(entry));
+  if (busy) return busy;
+  const settled = group.find((entry) => entry.phase === 'completed' || entry.phase === 'cancelled' || entry.phase === 'terminal');
+  if (settled) return settled;
+  return group[0];
+}
+
+/**
+ * R7 (§1): collapses every group of entries sharing the same
+ * storageObjectKey down to exactly one, so a single server
+ * reservation can never be represented by two different
+ * clientEntryId values (and therefore never expose two independent,
+ * concurrently-actionable Verify/Cancel/Retry identities for what is
+ * actually one reservation). Entries with no storageObjectKey at all
+ * (never signed, or an ambiguous entry that lost its sign response
+ * and has not yet recovered one) are never grouped -- they have
+ * nothing to collapse against yet.
+ *
+ * The winning entry (see pickWinner) keeps its OWN clientEntryId,
+ * reservationKey, File, and signedUploadUrl -- these are never taken
+ * from a losing duplicate. Only the merged PHASE (see PHASE_RANK) and
+ * that phase's own message are taken from whichever entry in the
+ * group actually holds the most advanced phase, which may not be the
+ * identity-winning entry itself (e.g. the synthetic recovered entry
+ * might be the one already marked 'completed' if a page reload
+ * happened between completion and the local entry ever learning that).
+ */
+export function collapseDuplicatesByObjectKey(entries: FileEntry[]): FileEntry[] {
+  const withoutKey: FileEntry[] = [];
+  const groups = new Map<string, FileEntry[]>();
+  for (const entry of entries) {
+    if (!entry.storageObjectKey) {
+      withoutKey.push(entry);
+      continue;
+    }
+    const group = groups.get(entry.storageObjectKey) ?? [];
+    group.push(entry);
+    groups.set(entry.storageObjectKey, group);
+  }
+
+  const collapsed: FileEntry[] = [];
+  for (const group of Array.from(groups.values())) {
+    if (group.length === 1) {
+      collapsed.push(group[0]);
+      continue;
+    }
+    const winner = pickWinner(group);
+    let bestPhaseEntry = group[0];
+    for (const entry of group) {
+      if (PHASE_RANK[entry.phase] > PHASE_RANK[bestPhaseEntry.phase]) bestPhaseEntry = entry;
+    }
+    collapsed.push({
+      ...winner,
+      filename: bestPhaseEntry.filename,
+      declaredContentType: bestPhaseEntry.declaredContentType,
+      declaredSizeBytes: bestPhaseEntry.declaredSizeBytes,
+      phase: bestPhaseEntry.phase,
+      message: bestPhaseEntry.phase === winner.phase ? winner.message : bestPhaseEntry.message,
+    });
+  }
+
+  return [...withoutKey, ...collapsed];
 }
 export function updateEntryById(entries: FileEntry[], clientEntryId: string, patch: Partial<FileEntry>): FileEntry[] {
   return entries.map((entry) => (entry.clientEntryId === clientEntryId ? { ...entry, ...patch } : entry));

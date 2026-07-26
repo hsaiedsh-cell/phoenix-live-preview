@@ -2,31 +2,27 @@
 
 // ============================================================
 // UploadClient — invitation-only private upload UI
-// PHX-LAUNCH-001 (R6: PHX-LAUNCH-001-R6 §1, §2, §3, §4)
+// PHX-LAUNCH-001 (R7: PHX-LAUNCH-001-R7 §5, §6)
 // ------------------------------------------------------------
-// R6 correction summary:
-//  - §1/§4: an entry left in `recoverable_error` with NO
-//    storageObjectKey (the sign response was lost or the request
-//    failed before the browser ever received one) now exposes a real
-//    "Retry upload request" action that calls signAndUpload() again
-//    with the exact SAME clientEntryId/reservationKey/filename/
-//    declaredContentType/declaredSizeBytes -- never a new
-//    reservationKey. The R5 server-side idempotent-sign contract was
-//    real but had no usable path from the customer interface until now.
-//  - §2: cancelEntry() no longer silently removes an entry whose
-//    storageObjectKey is unknown -- doing so previously hid an
-//    already-committed server reservation (still consuming quota)
-//    behind what looked like a successful local cancel. Local removal
-//    is now permitted ONLY for a never-submitted `pending` entry, or
-//    once the server has returned an explicit terminal/no-reservation
-//    result (phase 'terminal') for that entry.
-//  - §3: refreshUploadState now parses and applies the COMPLETE
-//    token-state response (not just four of its seven fields) and
-//    reconciles pendingReservations into the entry list via the pure,
-//    directly-testable reconcilePendingReservations helper -- keyed
-//    exclusively by storageObjectKey, never duplicating a recovered
-//    reservation across repeated refreshes, and merging a local entry
-//    with its recovered counterpart the moment they share an object key.
+// R7 correction summary:
+//  - §5: the token-state response can now report `state: 'finalized'`
+//    (a minimal receipt for an already-finalized session, R7 §4). On
+//    initial load this renders the success confirmation immediately,
+//    with no upload controls ever mounted. During refreshUploadState,
+//    a finalized receipt marks the whole session finalized and
+//    promotes any still-ambiguous local entry to 'completed' --
+//    finalization is only possible with zero reserved rows (R5 §3),
+//    so an entry that was ambiguous but had a real server reservation
+//    must have completed for finalization to have happened at all. A
+//    network failure during verifyEntry/handleFinish now triggers
+//    authoritative reconciliation rather than leaving the customer
+//    looking at a permanent, false error for work the server already
+//    committed -- and an ambiguous, still-known-object-key entry left
+//    over after a refresh is transparently re-verified, which (R7 §2)
+//    is now a safe, side-effect-free no-op if it was already completed.
+//  - §6: completedBytes/reservedBytes are now stored in component
+//    state alongside every other authoritative field, even though the
+//    UI does not currently need to display both.
 // ============================================================
 
 import { useEffect, useRef, useState } from 'react';
@@ -48,11 +44,13 @@ interface UploadClientProps {
 type TokenState =
   | { status: 'checking' }
   | { status: 'invalid' }
+  | { status: 'finalized'; completedCount: number }
   | { status: 'valid'; maxFiles: number; maxFileSizeBytes: number; maxTotalSizeBytes: number; expiresAt: string };
 
 type FinishState = 'idle' | 'finishing' | 'error';
 
-interface TokenStateResponse {
+interface ActiveTokenStateResponse {
+  state: 'active';
   maxFiles: number;
   maxFileSizeBytes: number;
   maxTotalSizeBytes: number;
@@ -65,6 +63,14 @@ interface TokenStateResponse {
   expiresAt: string;
   pendingReservations: PendingReservationSummary[];
 }
+
+interface FinalizedTokenStateResponse {
+  state: 'finalized';
+  completedCount: number;
+  finalizedAt: string;
+}
+
+type TokenStateResponse = ActiveTokenStateResponse | FinalizedTokenStateResponse;
 
 function generateClientId(): string {
   if (typeof crypto !== 'undefined' && 'randomUUID' in crypto) return crypto.randomUUID();
@@ -81,7 +87,9 @@ export function UploadClient({ token }: UploadClientProps) {
   const [tokenState, setTokenState] = useState<TokenState>({ status: 'checking' });
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [completedCount, setCompletedCount] = useState(0);
+  const [completedBytes, setCompletedBytes] = useState(0);
   const [reservedCount, setReservedCount] = useState(0);
+  const [reservedBytes, setReservedBytes] = useState(0);
   const [remainingFileSlots, setRemainingFileSlots] = useState<number | null>(null);
   const [remainingBytes, setRemainingBytes] = useState<number | null>(null);
   const [refreshError, setRefreshError] = useState('');
@@ -89,42 +97,84 @@ export function UploadClient({ token }: UploadClientProps) {
   const [finishState, setFinishState] = useState<FinishState>('idle');
   const [finishError, setFinishError] = useState('');
   const inFlightRef = useRef<Set<string>>(new Set());
-  // R5 (§5)/R6: monotonically increasing sequence guard -- a refresh
-  // response is applied only if it is still the most recently ISSUED
-  // refresh by the time it resolves.
   const refreshSeqRef = useRef(0);
   const entriesRef = useRef<FileEntry[]>([]);
   entriesRef.current = entries;
 
-  /** R5 (§5) + R6 (§3): the single reusable function that refreshes the COMPLETE authoritative token-state response and reconciles pendingReservations into the entry list. Never guesses on failure. */
-  async function refreshUploadState(): Promise<void> {
+  /**
+   * R5 (§5)/R6 (§3)/R7 (§5, §6): the single reusable function that
+   * refreshes the COMPLETE authoritative token-state response and
+   * reconciles it into the entry list. Returns whether the session is
+   * now known to be finalized, so a caller recovering from a network
+   * failure (verifyEntry, handleFinish) can distinguish "the server
+   * actually finalized this" from "still genuinely unresolved."
+   */
+  async function refreshUploadState(): Promise<{ finalized: boolean }> {
     const seq = ++refreshSeqRef.current;
     try {
       const response = await fetch(`/api/upload/${encodeURIComponent(token)}`);
-      if (seq !== refreshSeqRef.current) return;
+      if (seq !== refreshSeqRef.current) return { finalized };
       if (!response.ok) {
         setRefreshError('Your file state could not be refreshed. Please reload the page.');
-        return;
+        return { finalized };
       }
       const body = (await response.json()) as TokenStateResponse;
-      if (seq !== refreshSeqRef.current) return;
+      if (seq !== refreshSeqRef.current) return { finalized };
       setRefreshError('');
+
+      if (body.state === 'finalized') {
+        // R7 (§5): finalization requires zero reserved rows (R5 §3),
+        // so any local entry still sitting in an ambiguous state must
+        // actually have completed for finalization to have happened
+        // at all -- promote it rather than leaving a false error.
+        setCompletedCount(body.completedCount);
+        setFinalized(true);
+        setEntries((prev) =>
+          prev.map((entry) =>
+            entry.phase === 'cancelled' || entry.phase === 'terminal' || entry.phase === 'rejected'
+              ? entry
+              : { ...entry, phase: 'completed' as const, message: undefined }
+          )
+        );
+        return { finalized: true };
+      }
+
       setCompletedCount(body.completedCount);
+      setCompletedBytes(body.completedBytes);
       setReservedCount(body.reservedCount);
+      setReservedBytes(body.reservedBytes);
       setRemainingFileSlots(body.remainingFileSlots);
       setRemainingBytes(body.remainingBytes);
-      // R6 (§3): reconcile the authoritative pendingReservations list
-      // into the entry array -- keyed by storageObjectKey, never
-      // duplicating, never clobbering an in-flight local action.
       setEntries((prev) => reconcilePendingReservations(prev, body.pendingReservations));
       setTokenState((prev) =>
         prev.status === 'valid'
           ? { ...prev, maxFiles: body.maxFiles, maxFileSizeBytes: body.maxFileSizeBytes, maxTotalSizeBytes: body.maxTotalSizeBytes, expiresAt: body.expiresAt }
           : prev
       );
+
+      // R7 (§5): an entry left ambiguous by a network failure right
+      // after PUT/verify, whose object key is known but no longer
+      // appears in the server's pending list, is transparently
+      // re-verified -- if it was already completed, R7 §2's
+      // idempotent replay resolves this with no side effects.
+      const stillAmbiguous = entriesRef.current.filter(
+        (entry) =>
+          entry.phase === 'recoverable_error' &&
+          entry.storageObjectKey &&
+          entry.file &&
+          !body.pendingReservations.some((r) => r.storageObjectKey === entry.storageObjectKey)
+      );
+      for (const entry of stillAmbiguous) {
+        if (entry.storageObjectKey) {
+          // eslint-disable-next-line no-await-in-loop
+          await verifyEntry(entry.clientEntryId, entry.storageObjectKey);
+        }
+      }
+      return { finalized: false };
     } catch {
-      if (seq !== refreshSeqRef.current) return;
+      if (seq !== refreshSeqRef.current) return { finalized };
       setRefreshError('Your file state could not be refreshed. Please check your connection.');
+      return { finalized };
     }
   }
 
@@ -138,6 +188,15 @@ export function UploadClient({ token }: UploadClientProps) {
           return;
         }
         const body = (await response.json()) as TokenStateResponse;
+        if (body.state === 'finalized') {
+          // R7 (§5): render the success confirmation immediately --
+          // no upload controls are ever mounted for an
+          // already-finalized session.
+          setTokenState({ status: 'finalized', completedCount: body.completedCount });
+          setCompletedCount(body.completedCount);
+          setFinalized(true);
+          return;
+        }
         setTokenState({
           status: 'valid',
           maxFiles: body.maxFiles,
@@ -146,7 +205,9 @@ export function UploadClient({ token }: UploadClientProps) {
           expiresAt: body.expiresAt,
         });
         setCompletedCount(body.completedCount);
+        setCompletedBytes(body.completedBytes);
         setReservedCount(body.reservedCount);
+        setReservedBytes(body.reservedBytes);
         setRemainingFileSlots(body.remainingFileSlots);
         setRemainingBytes(body.remainingBytes);
         setEntries((prev) => reconcilePendingReservations(prev, body.pendingReservations));
@@ -163,8 +224,6 @@ export function UploadClient({ token }: UploadClientProps) {
     if (!fileList || finalized) return;
     const additions: FileEntry[] = Array.from(fileList).map((file) => ({
       clientEntryId: generateClientId(),
-      // R5 (§6): generated ONCE here, reused verbatim for every sign
-      // retry of this exact entry -- never regenerated.
       reservationKey: generateClientId(),
       file,
       filename: file.name,
@@ -175,7 +234,6 @@ export function UploadClient({ token }: UploadClientProps) {
     setEntries((prev) => [...prev, ...additions]);
   }
 
-  /** Sign (or re-sign, using the SAME reservationKey) -> PUT -> complete. */
   async function signAndUpload(clientEntryId: string) {
     if (inFlightRef.current.has(clientEntryId) || finalized) return;
     inFlightRef.current.add(clientEntryId);
@@ -198,8 +256,6 @@ export function UploadClient({ token }: UploadClientProps) {
         }),
       });
       if (signResponse.status === 409) {
-        // R6 (§1/§4): an explicit terminal/conflict result -- do not
-        // keep presenting a retry that can never succeed.
         setEntries((prev) =>
           updateEntryById(prev, clientEntryId, {
             phase: 'terminal',
@@ -223,12 +279,6 @@ export function UploadClient({ token }: UploadClientProps) {
       await refreshUploadState();
       await uploadEntry(clientEntryId, { storageObjectKey, signedUploadUrl: uploadUrl });
     } catch {
-      // R6 (§1): the response may have been lost even though the
-      // server-side reservation committed -- this entry stays
-      // recoverable, WITHOUT a storageObjectKey, and "Retry upload
-      // request" (this same function) is the way back in, reusing
-      // the identical reservationKey so the server-side idempotent
-      // reservation (R5 §6) is what actually resolves the ambiguity.
       setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while requesting an upload slot. Retry uses the same reservation -- it will not create a duplicate or consume extra quota.' }));
       inFlightRef.current.delete(clientEntryId);
       await refreshUploadState();
@@ -254,12 +304,6 @@ export function UploadClient({ token }: UploadClientProps) {
         body: entry.file,
       });
       if (!putResponse.ok) {
-        // R6 (§4): the signed URL itself may have expired -- offer
-        // both "retry the same PUT" (handled by rendering, since
-        // signedUploadUrl/storageObjectKey are both still known) and
-        // "request a fresh URL" (re-runs signAndUpload with the SAME
-        // reservationKey, which the server resolves to the identical
-        // reservation and simply reissues a new signed URL for it).
         setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Upload failed. You can retry, or request a fresh upload link if this one may have expired -- neither loses your place.' }));
         inFlightRef.current.delete(clientEntryId);
         await refreshUploadState();
@@ -304,29 +348,25 @@ export function UploadClient({ token }: UploadClientProps) {
         await refreshUploadState();
         return;
       }
-      const completeBody = (await completeResponse.json()) as { fileCount: number; finalized: boolean };
+      const completeBody = (await completeResponse.json()) as { fileCount: number; finalized: boolean; replayed?: boolean };
       setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'completed', message: undefined }));
+      setCompletedCount(completeBody.fileCount);
       if (completeBody.finalized) setFinalized(true);
       inFlightRef.current.delete(clientEntryId);
       await refreshUploadState();
     } catch {
+      // R7 (§5): a network failure here does NOT necessarily mean the
+      // completion didn't commit server-side -- call authoritative
+      // refresh rather than assuming failure. If the refresh reveals
+      // the session finalized, or this entry's own re-verification
+      // (triggered inside refreshUploadState) resolves it, the
+      // customer never sees a false permanent error.
       setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'recoverable_error', message: 'Network error while verifying. Please retry.' }));
       inFlightRef.current.delete(clientEntryId);
       await refreshUploadState();
     }
   }
 
-  /**
-   * R6 (§2): NEVER silently removes an entry whose server-side state
-   * is ambiguous. An entry with a known storageObjectKey is cancelled
-   * on the server as before. An entry with NO storageObjectKey but
-   * that HAS been submitted for signing (reservationKey exists and it
-   * is not still 'pending') cannot be safely removed locally -- its
-   * sign attempt may have committed a reservation the browser never
-   * learned the object key for. Only a genuinely never-submitted
-   * 'pending' entry, or one already in the explicit 'terminal' phase,
-   * is ever removed purely locally.
-   */
   async function cancelEntry(clientEntryId: string) {
     if (inFlightRef.current.has(clientEntryId) || finalized) return;
     const entry = findEntryById(entriesRef.current, clientEntryId);
@@ -337,13 +377,6 @@ export function UploadClient({ token }: UploadClientProps) {
         setEntries((prev) => removeEntryById(prev, clientEntryId));
         return;
       }
-      // R6 (§2): an ambiguous, already-submitted entry with no known
-      // object key -- do not remove it. Refreshing state is the only
-      // safe action here; if the server did commit a reservation,
-      // reconciliation will surface it (with its object key) as a
-      // recovered entry the customer can then Verify or Cancel
-      // normally, or the customer can use "Retry upload request"
-      // (signAndUpload) to resolve the ambiguity directly.
       await refreshUploadState();
       return;
     }
@@ -390,8 +423,17 @@ export function UploadClient({ token }: UploadClientProps) {
       setFinalized(true);
       setFinishState('idle');
     } catch {
-      setFinishState('error');
-      setFinishError('Network error. Please try again.');
+      // R7 (§5): the Finish request may have committed even though
+      // its response was lost -- reconcile via authoritative refresh
+      // rather than reporting a permanent network error when the
+      // server actually already finalized the session.
+      const result = await refreshUploadState();
+      if (result.finalized) {
+        setFinishState('idle');
+      } else {
+        setFinishState('error');
+        setFinishError('Network error. Please try again.');
+      }
     }
   }
 
@@ -411,8 +453,25 @@ export function UploadClient({ token }: UploadClientProps) {
     );
   }
 
+  if (tokenState.status === 'finalized') {
+    return (
+      <main className="max-w-2xl mx-auto py-24 px-6 text-center">
+        <h1 className="text-2xl font-bold text-phx-navy mb-3">Upload complete</h1>
+        <p className="text-sm text-green-700" role="status">
+          Thanks — {tokenState.completedCount} file{tokenState.completedCount === 1 ? '' : 's'} received and pending our
+          team&apos;s review.
+        </p>
+      </main>
+    );
+  }
+
   const finishDisabled = !computeCanFinish({ completedCount, reservedCount, entries, finalized, finishing: finishState === 'finishing' });
   const remaining = remainingFileSlots ?? tokenState.maxFiles;
+  // completedBytes/reservedBytes (R7 §6) are retained in state for
+  // authoritative reconciliation completeness even though the UI does
+  // not currently surface both independently.
+  void completedBytes;
+  void reservedBytes;
 
   return (
     <main className="max-w-2xl mx-auto py-24 px-6">
@@ -474,7 +533,6 @@ export function UploadClient({ token }: UploadClientProps) {
               )}
               {entry.phase === 'recoverable_error' && !finalized && !entry.storageObjectKey && (
                 <>
-                  {/* R6 §1/§2/§4: a lost/failed sign response with no object key yet -- the ONLY safe recovery is retrying the SAME reservation, or refreshing to see if the server actually already has it. No silent local cancel. */}
                   <span className="text-amber-600">{entry.message || 'Not yet confirmed.'}</span>
                   <button onClick={() => signAndUpload(entry.clientEntryId)} className="text-phx-cyan-dark underline" type="button">
                     Retry upload request

@@ -43,19 +43,31 @@ async function main() {
   const fakeStorage = createFakeStorageAdapter();
   __setStorageForTests(fakeStorage);
 
-  section('1. Structural: completeUploadObject/finishUploadSession issue no post-commit countCompletedForSession query');
+  section('1. Structural: the POST-TRANSACTION segment of completeUploadObject/finishUploadSession issues no redundant countCompletedForSession query');
   {
     const fs = await import('node:fs');
     const source = fs.readFileSync(new URL('../../src/lib/intake/upload-flow.service.ts', import.meta.url), 'utf8');
-    const completeFnMatch = source.match(/export async function completeUploadObject[\s\S]*?\n}\n/);
-    const finishFnMatch = source.match(/export async function finishUploadSession[\s\S]*?\n}\n/);
+    const completeFnMatch = source.match(/export async function completeUploadObject[\s\S]*?\n}\n\nexport type FinishUploadSessionOutcome/);
+    const finishFnMatch = source.match(/export async function finishUploadSession[\s\S]*?\n}\n\nexport type CancelReservationOutcome/);
     assert(!!completeFnMatch, 'completeUploadObject found in source');
     assert(!!finishFnMatch, 'finishUploadSession found in source');
+    // R7 (§2/§3): both functions now legitimately call
+    // countCompletedForSession in their PRE-transaction idempotent-
+    // replay branches (there is no transaction to carry a count out
+    // of when nothing new is being written at all) -- what still must
+    // never happen is a query issued AFTER the transaction that
+    // actually performs a state-changing commit, which is the
+    // specific redundant-query failure mode R4 fixed. Isolate just
+    // the segment from the transaction call onward to prove that.
     if (completeFnMatch) {
-      assert(!completeFnMatch[0].includes('intakeFilesRepo.countCompletedForSession('), 'completeUploadObject never calls the global-pool countCompletedForSession (only the InTransaction variant, inside withIntakeTransaction, is used)');
+      const postTransactionSegment = completeFnMatch[0].split('const result = await withIntakeTransaction(')[1] ?? '';
+      assert(postTransactionSegment.length > 0, 'the transaction call was found inside completeUploadObject');
+      assert(!postTransactionSegment.includes('intakeFilesRepo.countCompletedForSession('), 'the code that runs AFTER the state-changing transaction never calls the global-pool countCompletedForSession');
     }
     if (finishFnMatch) {
-      assert(!finishFnMatch[0].includes('intakeFilesRepo.countCompletedForSession('), 'finishUploadSession never calls the global-pool countCompletedForSession either');
+      const postTransactionSegment = finishFnMatch[0].split('const result = await withIntakeTransaction(')[1] ?? '';
+      assert(postTransactionSegment.length > 0, 'the transaction call was found inside finishUploadSession');
+      assert(!postTransactionSegment.includes('intakeFilesRepo.countCompletedForSession('), 'the code that runs AFTER the state-changing transaction never calls the global-pool countCompletedForSession either');
     }
     const finalizeFnMatch = source.match(/async function maybeFinalizeInTransaction[\s\S]*?\n}\n/);
     assert(!!finalizeFnMatch, 'maybeFinalizeInTransaction found in source');

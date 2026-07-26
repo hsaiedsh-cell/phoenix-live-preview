@@ -138,7 +138,7 @@ async function main() {
       const first = await completeUploadObject(rawToken, { storageObjectKey: sign.storageObjectKey });
       assert(first.kind === 'ok', 'first completion succeeds');
       const second = await completeUploadObject(rawToken, { storageObjectKey: sign.storageObjectKey });
-      assert(second.kind === 'completion_denied' && second.reason === 'not_reserved', 'a second completion attempt for the same object is denied');
+      assert(second.kind === 'ok' && second.replayed === true, 'a second completion attempt for the same already-completed object now returns an idempotent success replay (R7 §2), not a denial -- see gate2-completion-receipt-r7.qa.ts for the full contract proof');
     }
   }
 
@@ -156,7 +156,7 @@ async function main() {
     const finish1 = await finishUploadSession(rawToken);
     assert(finish1.ok, 'first explicit finish succeeds');
     const finish2 = await finishUploadSession(rawToken);
-    assert(finish2.ok === false, 'a second explicit finish reports ok:false (session already finalized, not re-finalized)');
+    assert(finish2.ok === true && finish2.alreadyFinalized === true, 'a second explicit finish now returns an idempotent already-finalized success receipt (R7 §3), not a failure');
 
     const sessionRows = await intakeQuery<{ status: string }>(`SELECT status FROM public_upload_sessions WHERE id = $1`, [sessionId]);
     assert(sessionRows[0].status === 'used', 'session status is used exactly once');

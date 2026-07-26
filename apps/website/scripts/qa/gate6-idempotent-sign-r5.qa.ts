@@ -55,7 +55,7 @@ async function main() {
     if (first.kind === 'ok' && retry.kind === 'ok') {
       assert(retry.storageObjectKey === first.storageObjectKey, 'the retry returns the SAME storage object key -- not a new reservation');
     }
-    const rows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE original_filename = $1`, ['lost-response.pdf']);
+    const rows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE original_filename = $1 AND request_id = $2`, ['lost-response.pdf', request.id]);
     assert(Number(rows[0].count) === 1, 'exactly one reservation row exists in the database despite two sign calls');
   }
 
@@ -98,7 +98,7 @@ async function main() {
     );
     const objectKeys = new Set(results.map((r) => (r.kind === 'ok' ? r.storageObjectKey : null)));
     assert(objectKeys.size === 1, 'every one of the 10 concurrent calls returns the SAME object key');
-    const rows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE original_filename = $1`, ['parallel.pdf']);
+    const rows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE original_filename = $1 AND request_id = $2`, ['parallel.pdf', request.id]);
     assert(Number(rows[0].count) === 1, 'exactly ONE reservation row exists in the database despite 10 truly concurrent same-key calls');
   }
 
@@ -129,7 +129,7 @@ async function main() {
     }
     const retrySameKey = await signUploadObject(rawToken, { filename: 'to-complete.pdf', contentType: 'application/pdf', sizeBytes: 1000, reservationKey });
     assert(retrySameKey.kind === 'reservation_terminal' && retrySameKey.status === 'completed', 'a sign retry against an already-completed reservation returns an explicit terminal result, not a new reservation');
-    const rows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE original_filename = $1`, ['to-complete.pdf']);
+    const rows = await intakeQuery<{ count: string }>(`SELECT count(*) FROM public_intake_files WHERE original_filename = $1 AND request_id = $2`, ['to-complete.pdf', request.id]);
     assert(Number(rows[0].count) === 1, 'still exactly one row -- the terminal retry created nothing new');
   }
 

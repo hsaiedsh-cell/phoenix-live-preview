@@ -123,7 +123,7 @@ async function main() {
     const { rawToken, sessionId } = await createSessionWithToken(request.id);
     await intakeQuery(`UPDATE public_upload_sessions SET status = 'used', finalized_at = now() WHERE id = $1`, [sessionId]);
     const outcome = await checkUploadToken(rawToken);
-    assert(outcome.kind === 'denied' && outcome.reason === 'used', 'a finalized/used session is still denied with the generic "used" reason, exactly as before R4');
+    assert(outcome.kind === 'finalized', 'a finalized/used session now returns the minimal finalized receipt (R7 §4), not a generic denial -- see gate4-finalized-receipt-r7.qa.ts for the full contract proof');
   }
 
   __resetAdaptersForTests();

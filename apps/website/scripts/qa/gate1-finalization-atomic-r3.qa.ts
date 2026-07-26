@@ -127,7 +127,7 @@ async function main() {
     const finish1 = await finishUploadSession(rawToken);
     assert(finish1.ok, 'first finish succeeds');
     const finish2 = await finishUploadSession(rawToken);
-    assert(finish2.ok === false, 'second finish reports failure (already finalized)');
+    assert(finish2.ok === true && finish2.alreadyFinalized === true, 'second finish now returns an idempotent already-finalized success (R7 §3), not a failure -- session was already used before this call');
   }
 
   section('6. 20+ concurrent finalizations (pool max=3) terminate without hanging; no global-pool call inside the transaction');

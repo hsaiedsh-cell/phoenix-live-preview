@@ -48,15 +48,58 @@ function isLocalConnection(connectionString: string): boolean {
   return /localhost|127\.0\.0\.1/.test(connectionString);
 }
 
+const SSL_QUERY_PARAMETERS = [
+  'sslmode',
+  'sslcert',
+  'sslkey',
+  'sslrootcert',
+  'uselibpqcompat',
+] as const;
+
+/**
+ * node-postgres can replace the programmatic `ssl` object when SSL
+ * parameters are also present in the connection string. Hosted
+ * connections therefore use one authoritative TLS configuration:
+ * the Supabase root CA supplied through server-only environment
+ * configuration.
+ */
+function sanitizeHostedConnectionString(connectionString: string): string {
+  const url = new URL(connectionString);
+
+  for (const parameter of SSL_QUERY_PARAMETERS) {
+    url.searchParams.delete(parameter);
+  }
+
+  return url.toString();
+}
+
+/**
+ * Vercel supports multiline environment values, while some local
+ * environment loaders preserve PEM line breaks as literal `\\n`.
+ * Accept both representations without weakening certificate checks.
+ */
+function normalizePemCertificate(value: string): string {
+  return value.includes('\\n') ? value.replace(/\\n/g, '\n') : value;
+}
+
 export function getIntakePool(): Pool {
   if (!pool) {
     const connectionString = serverConfig.databaseUrl;
+    const localConnection = isLocalConnection(connectionString);
+
     pool = new Pool({
-      connectionString,
-      // Hosted Supabase Postgres requires TLS; local/isolated
-      // PostgreSQL used for local verification does not present a
-      // valid chain, so only require (not verify) locally.
-      ssl: isLocalConnection(connectionString) ? undefined : { rejectUnauthorized: true },
+      connectionString: localConnection
+        ? connectionString
+        : sanitizeHostedConnectionString(connectionString),
+      // Local/isolated PostgreSQL remains unchanged. Hosted Supabase
+      // connections use strict certificate verification against the
+      // configured Supabase root CA.
+      ssl: localConnection
+        ? undefined
+        : {
+            ca: normalizePemCertificate(serverConfig.databaseCaCert),
+            rejectUnauthorized: true,
+          },
       // R2: no operation in this module ever holds a connection open
       // across an external network call anymore (see header comment),
       // so this pool size is a normal serverless-function concurrency

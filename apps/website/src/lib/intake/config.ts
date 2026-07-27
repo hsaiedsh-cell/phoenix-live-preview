@@ -42,6 +42,9 @@ export const serverConfig = {
   get databaseUrl(): string {
     return requireServerEnv('INTAKE_DATABASE_URL');
   },
+  get databaseCaCert(): string {
+    return requireServerEnv('INTAKE_DATABASE_CA_CERT');
+  },
   get intakeHashSecret(): string {
     return requireServerEnv('INTAKE_HASH_SECRET');
   },

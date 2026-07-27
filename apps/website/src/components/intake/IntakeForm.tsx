@@ -57,20 +57,25 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
   const turnstileWidgetIdRef = useRef<string | null>(null);
   const [turnstileToken, setTurnstileToken] = useState<string>('');
   const [turnstileError, setTurnstileError] = useState<string>('');
+  const [turnstileReady, setTurnstileReady] = useState(false);
 
   useEffect(() => {
     setRequestType(initialRequestType);
   }, [initialRequestType]);
 
   useEffect(() => {
-    if (!turnstileSiteKey) return;
+    if (!turnstileSiteKey || !turnstileReady) return;
     const w = window as unknown as {
       turnstile?: {
         render: (el: HTMLElement, opts: Record<string, unknown>) => string;
         reset: (widgetId?: string) => void;
       };
     };
-    if (w.turnstile && turnstileWidgetRef.current) {
+    if (
+      w.turnstile &&
+      turnstileWidgetRef.current &&
+      !turnstileWidgetIdRef.current
+    ) {
       turnstileWidgetIdRef.current = w.turnstile.render(turnstileWidgetRef.current, {
         sitekey: turnstileSiteKey,
         // R4 §7: matches the server-side TURNSTILE_EXPECTED_ACTION
@@ -94,7 +99,7 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
         },
       });
     }
-  }, [turnstileSiteKey]);
+  }, [turnstileSiteKey, turnstileReady]);
 
   /** R1 §2.5: resets the Turnstile widget (forcing a fresh token) after the server reports a rejected/expired token. */
   function resetTurnstile(): void {
@@ -202,7 +207,17 @@ export function IntakeForm({ initialRequestType }: IntakeFormProps) {
       aria-busy={isSubmitting}
     >
       {turnstileSiteKey && (
-        <Script src="https://challenges.cloudflare.com/turnstile/v0/api.js" strategy="afterInteractive" async defer />
+        <Script
+          src="https://challenges.cloudflare.com/turnstile/v0/api.js?render=explicit"
+          strategy="afterInteractive"
+          onReady={() => setTurnstileReady(true)}
+          onError={() => {
+            setTurnstileReady(false);
+            setTurnstileError(
+              'Verification failed to load. Please refresh and try again.',
+            );
+          }}
+        />
       )}
 
       <div>

@@ -23,7 +23,7 @@ export default function TermsPage() {
         subline="Private Beta draft. This page is not final legal advice and requires qualified legal review before commercial publication."
       />
       <section className="py-16 lg:py-24 px-6 lg:px-8 bg-white">
-        <div className="max-w-3xl mx-auto prose prose-sm">
+        <div className="legal-content mx-auto max-w-4xl">
           <div className="mb-10 p-4 border border-amber-300 bg-amber-50 rounded-lg text-sm text-amber-800">
             <strong>Draft notice.</strong> These Terms are a Private Beta draft prepared for internal and legal
             review. They do not constitute legal advice and must not be treated as final or binding until

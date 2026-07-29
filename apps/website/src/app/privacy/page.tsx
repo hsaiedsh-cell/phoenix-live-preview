@@ -8,17 +8,14 @@ export const metadata: Metadata = {
 };
 
 // ============================================================
-// DRAFT — NOT LEGAL ADVICE — REQUIRES QUALIFIED UAE LEGAL REVIEW
+// DRAFT — NOT LEGAL ADVICE — REQUIRES QUALIFIED LEGAL REVIEW
 // ------------------------------------------------------------
-// Per the PHX-LAUNCH-001 execution package:
-//   - "PheonixOPS" is preserved EXACTLY as supplied by the owner.
-//     Do not "correct" it to "PhoenixOPS" without explicit owner
-//     confirmation of the intended spelling and legal entity form.
-//   - Governing law is drafted as a UAE placeholder only. No court,
-//     emirate, ADGM, DIFC, or other specific forum has been invented
-//     or selected — see PHX-LAUNCH-001-LEGAL-DRAFT-REVIEW-NOTES.md.
-//   - This page must NOT be published to production until the owner
-//     confirms both of the above. See index metadata below.
+// Owner-approved private-beta identity wording:
+//   - "PhoenixOPS" is the official brand spelling.
+//   - PhoenixOPS is operated independently by its founder.
+//   - No personal name, registered-entity claim, or operator country
+//     is presented in the public-facing private-beta draft.
+//   - Final commercial publication remains subject to legal review.
 // ============================================================
 
 export default function PrivacyPolicyPage() {
@@ -27,7 +24,7 @@ export default function PrivacyPolicyPage() {
       <PageHero
         eyebrow="Legal — Draft"
         headline="Privacy Policy"
-        subline="Private Beta draft. This page is not final legal advice and requires qualified UAE legal review before publication."
+        subline="Private Beta draft. This page is not final legal advice and requires qualified legal review before commercial publication."
       />
       <section className="py-16 lg:py-24 px-6 lg:px-8 bg-white">
         <div className="max-w-3xl mx-auto prose prose-sm">
@@ -39,9 +36,9 @@ export default function PrivacyPolicyPage() {
           </div>
 
           <p>
-            This Privacy Policy describes how PheonixOPS (&quot;PheonixOPS&quot;, &quot;we&quot;, &quot;us&quot;, or
-            &quot;our&quot;) collects, uses, and safeguards information in connection with the Phoenix Private
-            Beta website and request-intake service (the &quot;Service&quot;).
+            PhoenixOPS is a private-beta project operated independently by its founder. This Privacy Policy
+            explains how information submitted through the PhoenixOPS website and request-intake service
+            (the &quot;Service&quot;) is collected, used, stored, and protected.
           </p>
 
           <h2>1. Information we collect</h2>
@@ -94,9 +91,8 @@ export default function PrivacyPolicyPage() {
 
           <h2>6. Cross-border processing</h2>
           <p>
-            Our service providers may process personal data in countries other than your own, including the
-            United Arab Emirates and other jurisdictions in which our providers operate infrastructure. Where
-            required by applicable law, we rely on appropriate safeguards for such transfers.
+            Service providers may process or store information in multiple jurisdictions. Appropriate
+            technical, organizational, and contractual safeguards will be applied where relevant.
           </p>
 
           <h2>7. Your rights</h2>
@@ -115,11 +111,8 @@ export default function PrivacyPolicyPage() {
 
           <h2>9. Governing law</h2>
           <p>
-            <strong>[DRAFT PLACEHOLDER — PENDING OWNER CONFIRMATION]</strong> This Policy is intended to be
-            governed by the laws of the United Arab Emirates. The specific Emirate, court, or free-zone forum
-            (for example, Abu Dhabi courts, Dubai courts, ADGM, or DIFC) has not yet been selected and must be
-            confirmed by the business owner and reviewed by qualified UAE counsel before this Policy is
-            published as final.
+            This private-beta draft does not specify a governing law or dispute-resolution forum. Those
+            provisions will be completed and legally reviewed before any commercial launch.
           </p>
 
           <h2>10. Contact</h2>

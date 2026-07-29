@@ -8,11 +8,10 @@ export const metadata: Metadata = {
 };
 
 // ============================================================
-// DRAFT — NOT LEGAL ADVICE — REQUIRES QUALIFIED UAE LEGAL REVIEW
-// See src/app/privacy/page.tsx for the same mandatory publishing
-// stop conditions (spelling of "PheonixOPS", legal entity form, and
-// UAE dispute-forum confirmation). Nothing here invents a court,
-// emirate, ADGM, DIFC, or other specific forum.
+// DRAFT — NOT LEGAL ADVICE — REQUIRES QUALIFIED LEGAL REVIEW
+// Public-facing draft uses the approved independent private-beta
+// wording. Governing-law and dispute-resolution provisions must be
+// completed and legally reviewed before any commercial launch.
 // ============================================================
 
 export default function TermsPage() {
@@ -21,7 +20,7 @@ export default function TermsPage() {
       <PageHero
         eyebrow="Legal — Draft"
         headline="Terms"
-        subline="Private Beta draft. This page is not final legal advice and requires qualified UAE legal review before publication."
+        subline="Private Beta draft. This page is not final legal advice and requires qualified legal review before commercial publication."
       />
       <section className="py-16 lg:py-24 px-6 lg:px-8 bg-white">
         <div className="max-w-3xl mx-auto prose prose-sm">
@@ -33,9 +32,9 @@ export default function TermsPage() {
           </div>
 
           <p>
-            These Terms govern your use of the Phoenix Private Beta website and request-intake service (the
-            &quot;Service&quot;) operated by PheonixOPS (&quot;PheonixOPS&quot;, &quot;we&quot;, &quot;us&quot;, or
-            &quot;our&quot;). By submitting a request through the Service, you agree to these Terms.
+            PhoenixOPS is a private-beta project operated independently by its founder. These Terms govern
+            access to and use of the PhoenixOPS Private Beta website and request-intake service
+            (the &quot;Service&quot;). By submitting a request through the Service, you agree to these Terms.
           </p>
 
           <h2>1. Private Beta status</h2>
@@ -105,19 +104,15 @@ export default function TermsPage() {
 
           <h2>11. Limitation of liability</h2>
           <p>
-            To the fullest extent permitted by applicable law, PheonixOPS shall not be liable for any indirect,
+            To the fullest extent permitted by applicable law, PhoenixOPS shall not be liable for any indirect,
             incidental, special, consequential, or punitive damages arising out of or relating to your use of
             the Service.
           </p>
 
           <h2>12. Governing law</h2>
           <p>
-            <strong>[DRAFT PLACEHOLDER — PENDING OWNER CONFIRMATION]</strong> These Terms are intended to be
-            governed by the laws of the United Arab Emirates. The specific Emirate, court, or free-zone forum
-            (for example, Abu Dhabi courts, Dubai courts, ADGM, or DIFC) has not yet been selected. This
-            placeholder must be replaced with a specific, owner-confirmed forum and reviewed by qualified UAE
-            counsel before these Terms are published as final. No forum has been assumed or invented in this
-            draft.
+            This private-beta draft does not specify a governing law or dispute-resolution forum. Final
+            commercial terms will include those provisions before any commercial launch.
           </p>
 
           <h2>13. Contact</h2>

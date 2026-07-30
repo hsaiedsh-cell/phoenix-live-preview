@@ -1,71 +1,96 @@
 // ============================================================
-// QA: Bearer-token page/response protections (R5)
-// PHX-LAUNCH-001-R5 Section 8
-// EXECUTED -- calls the real middleware function and reads real
-// source/config files directly. No live Vercel/browser request-log
-// review is performed or claimed (see the R5 Implementation Report
-// for the explicit note that platform-level request-log behavior
-// still requires live Preview review before Private Beta Go).
+// QA: Fixed-path bearer-token transport protections
+// PHX-LAUNCH-001 token-transport migration
 // ============================================================
 
 import { assert, section, printSummaryAndExit } from './assert';
 
 async function main() {
-  section('1. Middleware applies Cache-Control, Referrer-Policy, and X-Robots-Tag to matched routes');
+  section('1. Middleware protects the fixed upload page and API routes');
   {
     const { middleware, config } = await import('../../src/middleware');
-    const request = new Request('https://phoenixops.ai/upload/some-token-value');
+    const request = new Request('https://phoenixops.ai/upload');
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const response = middleware(request as any);
     assert(response.headers.get('Cache-Control') === 'no-store, private', 'Cache-Control: no-store, private is set');
     assert(response.headers.get('Referrer-Policy') === 'no-referrer', 'Referrer-Policy: no-referrer is set');
     assert(response.headers.get('X-Robots-Tag') === 'noindex, nofollow, noarchive', 'X-Robots-Tag: noindex, nofollow, noarchive is set');
-    assert(Array.isArray(config.matcher) && config.matcher.some((m: string) => m.includes('/upload/')), 'the matcher covers the /upload/:token page');
-    assert(Array.isArray(config.matcher) && config.matcher.some((m: string) => m.includes('/api/upload/')), 'the matcher covers every /api/upload/* route');
+    assert(Array.isArray(config.matcher) && config.matcher.includes('/upload'), 'the matcher covers the fixed /upload page');
+    assert(Array.isArray(config.matcher) && config.matcher.includes('/api/upload/session/:path*'), 'the matcher covers the fixed upload-session API family');
   }
 
-  section('2. Upload page metadata: noindex, nofollow, noarchive, and forced dynamic rendering');
+  section('2. Fixed upload page metadata and fragment-consuming client');
   {
     const fs = await import('node:fs');
-    const source = fs.readFileSync(new URL('../../src/app/upload/[token]/page.tsx', import.meta.url), 'utf8');
-    assert(source.includes('index: false'), 'robots.index is false');
-    assert(source.includes('follow: false'), 'robots.follow is false');
-    assert(source.includes('noarchive: true'), 'robots.noarchive is true (R5 addition)');
-    assert(source.includes("export const dynamic = 'force-dynamic'"), 'the page is forced dynamic -- never statically generated/cached at build time (R5 addition)');
+    const pageSource = fs.readFileSync(new URL('../../src/app/upload/page.tsx', import.meta.url), 'utf8');
+    const clientSource = fs.readFileSync(new URL('../../src/components/intake/UploadClient.tsx', import.meta.url), 'utf8');
+    assert(pageSource.includes('index: false'), 'robots.index is false');
+    assert(pageSource.includes('follow: false'), 'robots.follow is false');
+    assert(pageSource.includes('noarchive: true'), 'robots.noarchive is true');
+    assert(pageSource.includes("export const dynamic = 'force-dynamic'"), 'the page is forced dynamic');
+    assert(clientSource.includes("window.location.hash.slice(1)"), 'the client reads the credential from the URL fragment');
+    assert(clientSource.includes("window.history.replaceState"), 'the client removes the fragment before API traffic');
+    assert(!clientSource.includes('localStorage') && !clientSource.includes('sessionStorage') && !clientSource.includes('document.cookie'), 'the client does not persist the credential in browser storage or cookies');
   }
 
-  section('3. The token-state API route and every upload mutation route are covered by the no-store middleware (structural: matcher + route inventory)');
+  section('3. Bearer extraction is exact and fails closed');
+  {
+    const { getUploadBearerToken } = await import('../../src/lib/intake/http');
+    const token = 'A'.repeat(43);
+    assert(getUploadBearerToken(new Request('https://phoenixops.ai/api/upload/session')) === null, 'missing Authorization header is rejected');
+    assert(getUploadBearerToken(new Request('https://phoenixops.ai/api/upload/session', { headers: { Authorization: `bearer ${token}` } })) === null, 'wrong-case scheme is rejected by the exact contract');
+    assert(getUploadBearerToken(new Request('https://phoenixops.ai/api/upload/session', { headers: { Authorization: 'Bearer short' } })) === null, 'malformed token length is rejected');
+    assert(getUploadBearerToken(new Request('https://phoenixops.ai/api/upload/session', { headers: { Authorization: `Bearer ${token}` } })) === token, 'a valid 43-character base64url bearer token is accepted');
+  }
+
+  section('4. Fixed route inventory exists and token-in-path routes are gone');
   {
     const fs = await import('node:fs');
-    const routeFiles = [
-      'src/app/api/upload/[token]/route.ts',
-      'src/app/api/upload/[token]/sign/route.ts',
-      'src/app/api/upload/[token]/complete/route.ts',
-      'src/app/api/upload/[token]/finish/route.ts',
-      'src/app/api/upload/[token]/cancel/route.ts',
+    const fixedRouteFiles = [
+      'src/app/api/upload/session/route.ts',
+      'src/app/api/upload/session/sign/route.ts',
+      'src/app/api/upload/session/complete/route.ts',
+      'src/app/api/upload/session/finish/route.ts',
+      'src/app/api/upload/session/cancel/route.ts',
     ];
-    for (const relativePath of routeFiles) {
-      assert(fs.existsSync(new URL(`../../${relativePath}`, import.meta.url)), `${relativePath} exists and falls under the /api/upload/:path* matcher`);
+    for (const relativePath of fixedRouteFiles) {
+      assert(fs.existsSync(new URL(`../../${relativePath}`, import.meta.url)), `${relativePath} exists under the fixed request path`);
     }
+    assert(!fs.existsSync(new URL('../../src/app/api/upload/[token]', import.meta.url)), 'the legacy /api/upload/[token] route tree is removed');
+    assert(!fs.existsSync(new URL('../../src/app/upload/[token]', import.meta.url)), 'the legacy /upload/[token] page is removed');
   }
 
-  section('4. No upload token route is listed in the sitemap');
+  section('5. Browser API calls use fixed paths and Authorization: Bearer');
   {
     const fs = await import('node:fs');
-    const sitemapSource = fs.readFileSync(new URL('../../src/app/sitemap.ts', import.meta.url), 'utf8');
-    assert(!sitemapSource.includes('/upload'), 'sitemap.ts contains no reference to any /upload route -- it uses a fixed, explicit list of public marketing routes only');
+    const clientSource = fs.readFileSync(new URL('../../src/components/intake/UploadClient.tsx', import.meta.url), 'utf8');
+    for (const path of [
+      '/api/upload/session',
+      '/api/upload/session/sign',
+      '/api/upload/session/complete',
+      '/api/upload/session/cancel',
+      '/api/upload/session/finish',
+    ]) {
+      assert(clientSource.includes(path), `UploadClient uses fixed path ${path}`);
+    }
+    assert(clientSource.includes('Authorization: `Bearer ${token}`'), 'UploadClient sends the credential only in Authorization: Bearer');
+    assert(!/fetch\(`\/api\/upload\/\$\{/.test(clientSource), 'UploadClient never interpolates a credential into an API path');
   }
 
-  section('5. The raw token is never included in a log/monitoring call site alongside a route literal (structural spot-check)');
+  section('6. Invitation transport uses a fragment, not a path segment');
+  {
+    const fs = await import('node:fs');
+    const sessionSource = fs.readFileSync(new URL('../../src/lib/intake/upload-session.service.ts', import.meta.url), 'utf8');
+    assert(sessionSource.includes("new URL('/upload', publicConfig.siteUrl)"), 'invitation construction targets the fixed /upload page');
+    assert(sessionSource.includes('uploadUrlValue.hash'), 'invitation construction carries the token in the URL fragment');
+    assert(!sessionSource.includes('`/upload/${rawToken}`'), 'invitation construction does not place the token in the path');
+  }
+
+  section('7. Raw token is never used as an event subject');
   {
     const fs = await import('node:fs');
     const uploadFlowSource = fs.readFileSync(new URL('../../src/lib/intake/upload-flow.service.ts', import.meta.url), 'utf8');
-    // Every recordPostCommitEvent/recordEvent call in this file is
-    // keyed by request_id (a database UUID, safe), never by rawToken
-    // or token (the bearer credential) -- confirmed by checking no
-    // call site passes a variable literally named rawToken/token as
-    // an event's subject.
-    assert(!/record(PostCommit)?Event(InTransaction)?\(\s*(rawToken|token)\b/.test(uploadFlowSource), 'no event-recording call in upload-flow.service.ts is keyed by the raw token');
+    assert(!/record(PostCommit)?Event(InTransaction)?\(\s*(rawToken|token)\b/.test(uploadFlowSource), 'no event-recording call is keyed by the raw bearer credential');
   }
 
   printSummaryAndExit();

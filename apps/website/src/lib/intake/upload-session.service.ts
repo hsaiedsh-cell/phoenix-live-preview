@@ -95,7 +95,9 @@ export async function issueUploadSession(requestId: string): Promise<IssueUpload
 
   const { session, publicReference, workEmail } = transactionResult;
 
-  const uploadUrl = `${publicConfig.siteUrl}/upload/${rawToken}`;
+  const uploadUrlValue = new URL('/upload', publicConfig.siteUrl);
+  uploadUrlValue.hash = new URLSearchParams({ token: rawToken }).toString();
+  const uploadUrl = uploadUrlValue.toString();
   const email = buildUploadInvitationEmail({
     publicReference,
     uploadUrl,

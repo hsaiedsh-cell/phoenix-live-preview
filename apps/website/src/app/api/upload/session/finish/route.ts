@@ -1,17 +1,9 @@
 // ============================================================
-// POST /api/upload/:token/finish
-// PHX-LAUNCH-001-R2 §3.2 item 3
+// POST /api/upload/session/finish
+// PHX-LAUNCH-001 token-transport migration
 // ------------------------------------------------------------
-// New in R2: backs the customer-facing explicit "Finish uploading"
-// action. Public but invitation-only, same posture as the other
-// upload routes. Takes no body beyond what the token itself implies
-// -- there is nothing else for the client to declare. Goes through
-// the same atomically-revalidated finalization transaction as
-// completeUploadObject (see upload-flow.service.ts's
-// maybeFinalizeInTransaction) so a session that was concurrently
-// revoked or has expired cannot be finalized here either, and a
-// zero-completed-file finish is rejected rather than silently
-// "succeeding".
+// Fixed-path invitation-only endpoint. The raw credential is accepted
+// only through Authorization: Bearer and never appears in requestPath.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -19,6 +11,7 @@ import { finishUploadSession } from '@/lib/intake/upload-flow.service';
 import {
   newRequestId,
   genericErrorResponse,
+  getUploadBearerToken,
   logIntakeEvent,
   reportInternalError,
   requireJsonContentType,
@@ -28,14 +21,15 @@ import {
 
 export const runtime = 'nodejs';
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ token: string }> }
-): Promise<NextResponse> {
-  const { token } = await params;
+export async function POST(request: Request): Promise<NextResponse> {
   const requestId = newRequestId();
-  const route = 'POST /api/upload/[token]/finish';
+  const route = 'POST /api/upload/session/finish';
+  const token = getUploadBearerToken(request);
 
+  if (!token) {
+    logIntakeEvent({ requestId, route, outcome: 'bearer_missing_or_invalid', statusCode: 404 });
+    return genericErrorResponse(404, 'This upload link is not valid.', requestId);
+  }
   if (!requireJsonContentType(request)) {
     return genericErrorResponse(415, 'Unsupported Media Type.', requestId);
   }

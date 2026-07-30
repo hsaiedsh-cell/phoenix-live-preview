@@ -4,8 +4,8 @@
 // cancellation, and authoritative state reporting
 // PHX-LAUNCH-001 (R5: PHX-LAUNCH-001-R5 §2, §3, §6)
 // ------------------------------------------------------------
-// Backs GET /api/upload/:token, POST /api/upload/:token/sign,
-// POST /api/upload/:token/complete, and POST /api/upload/:token/cancel.
+// Backs GET /api/upload/session, POST /api/upload/session/sign,
+// POST /api/upload/session/complete, and POST /api/upload/session/cancel.
 // Public but invitation-only: anonymous callers without a valid token
 // are always denied.
 //

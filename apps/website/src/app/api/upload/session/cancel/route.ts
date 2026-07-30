@@ -1,13 +1,9 @@
 // ============================================================
-// POST /api/upload/:token/cancel
-// PHX-LAUNCH-001-R4 §2.3
+// POST /api/upload/session/cancel
+// PHX-LAUNCH-001 token-transport migration
 // ------------------------------------------------------------
-// New in R4: lets the token holder release a still-`reserved`
-// object's quota (a failed/ambiguous PUT, a page reload with a
-// no-longer-wanted file, etc.). Public but invitation-only, same
-// posture as the other upload routes. Completed reservations can
-// never be cancelled; a duplicate cancel is idempotent (still a 200,
-// `cancelled: false` the second time).
+// Fixed-path invitation-only endpoint. The raw credential is accepted
+// only through Authorization: Bearer and never appears in requestPath.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -16,6 +12,7 @@ import { z } from 'zod';
 import {
   newRequestId,
   genericErrorResponse,
+  getUploadBearerToken,
   logIntakeEvent,
   reportInternalError,
   readBoundedJsonBody,
@@ -30,14 +27,15 @@ const cancelBodySchema = z.object({
   storageObjectKey: z.string().trim().min(1).max(500),
 });
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ token: string }> }
-): Promise<NextResponse> {
-  const { token } = await params;
+export async function POST(request: Request): Promise<NextResponse> {
   const requestId = newRequestId();
-  const route = 'POST /api/upload/[token]/cancel';
+  const route = 'POST /api/upload/session/cancel';
+  const token = getUploadBearerToken(request);
 
+  if (!token) {
+    logIntakeEvent({ requestId, route, outcome: 'bearer_missing_or_invalid', statusCode: 404 });
+    return genericErrorResponse(404, 'This upload link is not valid.', requestId);
+  }
   if (!requireJsonContentType(request)) {
     return genericErrorResponse(415, 'Unsupported Media Type.', requestId);
   }

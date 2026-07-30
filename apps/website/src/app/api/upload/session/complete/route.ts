@@ -1,30 +1,37 @@
 // ============================================================
-// POST /api/upload/:token/complete
-// PHX-LAUNCH-001 (R1: PHX-LAUNCH-001-R1 §1.3)
+// POST /api/upload/session/complete
+// PHX-LAUNCH-001 token-transport migration
 // ------------------------------------------------------------
-// Public endpoint, invitation-only. R1: the body is now the minimal
-// { storageObjectKey, finishSession } contract -- originalFilename
-// and contentType are NEVER accepted from the client here; they are
-// already bound to the server-side reservation created during
-// signing and are revalidated against the storage provider's own
-// provider-recorded size and Content-Type metadata inside completeUploadObject.
+// Fixed-path invitation-only endpoint. The raw credential is accepted
+// only through Authorization: Bearer and never appears in requestPath.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { completeUploadObject } from '@/lib/intake/upload-flow.service';
 import { uploadCompleteSchema } from '@/lib/intake/schema';
-import { newRequestId, genericErrorResponse, logIntakeEvent, reportInternalError, readBoundedJsonBody, requireJsonContentType, isCrossSiteBrowserRequest, isOriginAllowed } from '@/lib/intake/http';
+import {
+  newRequestId,
+  genericErrorResponse,
+  getUploadBearerToken,
+  logIntakeEvent,
+  reportInternalError,
+  readBoundedJsonBody,
+  requireJsonContentType,
+  isCrossSiteBrowserRequest,
+  isOriginAllowed,
+} from '@/lib/intake/http';
 
 export const runtime = 'nodejs';
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ token: string }> }
-): Promise<NextResponse> {
-  const { token } = await params;
+export async function POST(request: Request): Promise<NextResponse> {
   const requestId = newRequestId();
-  const route = 'POST /api/upload/[token]/complete';
+  const route = 'POST /api/upload/session/complete';
+  const token = getUploadBearerToken(request);
 
+  if (!token) {
+    logIntakeEvent({ requestId, route, outcome: 'bearer_missing_or_invalid', statusCode: 404 });
+    return genericErrorResponse(404, 'This upload link is not valid.', requestId);
+  }
   if (!requireJsonContentType(request)) {
     return genericErrorResponse(415, 'Unsupported Media Type.', requestId);
   }

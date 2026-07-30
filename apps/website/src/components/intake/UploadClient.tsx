@@ -37,10 +37,6 @@ import {
   reconcilePendingReservations,
 } from './upload-client-state';
 
-interface UploadClientProps {
-  token: string;
-}
-
 type TokenState =
   | { status: 'checking' }
   | { status: 'invalid' }
@@ -83,7 +79,17 @@ function formatBytes(bytes: number): string {
   return `${bytes} B`;
 }
 
-export function UploadClient({ token }: UploadClientProps) {
+const UPLOAD_TOKEN_PATTERN = /^[A-Za-z0-9_-]{43}$/;
+
+function uploadHeaders(token: string, includeJson = false): HeadersInit {
+  return {
+    ...(includeJson ? { 'Content-Type': 'application/json' } : {}),
+    Authorization: `Bearer ${token}`,
+  };
+}
+
+export function UploadClient() {
+  const [token, setToken] = useState<string | null>(null);
   const [tokenState, setTokenState] = useState<TokenState>({ status: 'checking' });
   const [entries, setEntries] = useState<FileEntry[]>([]);
   const [completedCount, setCompletedCount] = useState(0);
@@ -97,6 +103,7 @@ export function UploadClient({ token }: UploadClientProps) {
   const [finishState, setFinishState] = useState<FinishState>('idle');
   const [finishError, setFinishError] = useState('');
   const inFlightRef = useRef<Set<string>>(new Set());
+  const fragmentConsumedRef = useRef(false);
   const refreshSeqRef = useRef(0);
   const entriesRef = useRef<FileEntry[]>([]);
   entriesRef.current = entries;
@@ -110,9 +117,13 @@ export function UploadClient({ token }: UploadClientProps) {
    * actually finalized this" from "still genuinely unresolved."
    */
   async function refreshUploadState(): Promise<{ finalized: boolean }> {
+    if (!token) return { finalized };
     const seq = ++refreshSeqRef.current;
     try {
-      const response = await fetch(`/api/upload/${encodeURIComponent(token)}`);
+      const response = await fetch('/api/upload/session', {
+        headers: uploadHeaders(token),
+        cache: 'no-store',
+      });
       if (seq !== refreshSeqRef.current) return { finalized };
       if (!response.ok) {
         setRefreshError('Your file state could not be refreshed. Please reload the page.');
@@ -179,8 +190,32 @@ export function UploadClient({ token }: UploadClientProps) {
   }
 
   useEffect(() => {
+    if (fragmentConsumedRef.current) return;
+    fragmentConsumedRef.current = true;
+
+    const fragment = new URLSearchParams(window.location.hash.slice(1));
+    const candidate = fragment.get('token');
+
+    // Remove the bearer credential from the visible URL before the
+    // first network request. It remains only in this component's
+    // in-memory state for the lifetime of the page.
+    window.history.replaceState(null, '', `${window.location.pathname}${window.location.search}`);
+
+    if (!candidate || !UPLOAD_TOKEN_PATTERN.test(candidate)) {
+      setTokenState({ status: 'invalid' });
+      return;
+    }
+
+    setToken(candidate);
+  }, []);
+
+  useEffect(() => {
+    if (!token) return;
     let cancelled = false;
-    fetch(`/api/upload/${encodeURIComponent(token)}`)
+    fetch('/api/upload/session', {
+      headers: uploadHeaders(token),
+      cache: 'no-store',
+    })
       .then(async (response) => {
         if (cancelled) return;
         if (!response.ok) {
@@ -235,7 +270,7 @@ export function UploadClient({ token }: UploadClientProps) {
   }
 
   async function signAndUpload(clientEntryId: string) {
-    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    if (!token || inFlightRef.current.has(clientEntryId) || finalized) return;
     inFlightRef.current.add(clientEntryId);
     const entry = findEntryById(entriesRef.current, clientEntryId);
     if (!entry || !entry.reservationKey) {
@@ -245,9 +280,9 @@ export function UploadClient({ token }: UploadClientProps) {
 
     setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'signing', message: undefined }));
     try {
-      const signResponse = await fetch(`/api/upload/${encodeURIComponent(token)}/sign`, {
+      const signResponse = await fetch('/api/upload/session/sign', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: uploadHeaders(token, true),
         body: JSON.stringify({
           filename: entry.filename,
           contentType: entry.declaredContentType,
@@ -321,7 +356,7 @@ export function UploadClient({ token }: UploadClientProps) {
   }
 
   async function verifyEntry(clientEntryId: string, storageObjectKeyOverride?: string) {
-    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    if (!token || inFlightRef.current.has(clientEntryId) || finalized) return;
     inFlightRef.current.add(clientEntryId);
     const entry = findEntryById(entriesRef.current, clientEntryId);
     const storageObjectKey = storageObjectKeyOverride ?? entry?.storageObjectKey;
@@ -332,9 +367,9 @@ export function UploadClient({ token }: UploadClientProps) {
 
     setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'verifying' }));
     try {
-      const completeResponse = await fetch(`/api/upload/${encodeURIComponent(token)}/complete`, {
+      const completeResponse = await fetch('/api/upload/session/complete', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: uploadHeaders(token, true),
         body: JSON.stringify({ storageObjectKey, finishSession: false }),
       });
       if (!completeResponse.ok) {
@@ -368,7 +403,7 @@ export function UploadClient({ token }: UploadClientProps) {
   }
 
   async function cancelEntry(clientEntryId: string) {
-    if (inFlightRef.current.has(clientEntryId) || finalized) return;
+    if (!token || inFlightRef.current.has(clientEntryId) || finalized) return;
     const entry = findEntryById(entriesRef.current, clientEntryId);
     if (!entry) return;
 
@@ -384,9 +419,9 @@ export function UploadClient({ token }: UploadClientProps) {
     inFlightRef.current.add(clientEntryId);
     setEntries((prev) => updateEntryById(prev, clientEntryId, { phase: 'cancelling' }));
     try {
-      const response = await fetch(`/api/upload/${encodeURIComponent(token)}/cancel`, {
+      const response = await fetch('/api/upload/session/cancel', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: uploadHeaders(token, true),
         body: JSON.stringify({ storageObjectKey: entry.storageObjectKey }),
       });
       if (response.ok) {
@@ -403,13 +438,13 @@ export function UploadClient({ token }: UploadClientProps) {
   }
 
   async function handleFinish() {
-    if (finishState === 'finishing' || finalized) return;
+    if (!token || finishState === 'finishing' || finalized) return;
     setFinishState('finishing');
     setFinishError('');
     try {
-      const response = await fetch(`/api/upload/${encodeURIComponent(token)}/finish`, {
+      const response = await fetch('/api/upload/session/finish', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: uploadHeaders(token, true),
       });
       if (!response.ok) {
         const body = (await response.json().catch(() => null)) as { error?: string } | null;

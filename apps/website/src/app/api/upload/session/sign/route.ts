@@ -1,12 +1,9 @@
 // ============================================================
-// POST /api/upload/:token/sign
-// PHX-LAUNCH-001 (R1: PHX-LAUNCH-001-R1 §1.2, §1.4, §2.4)
+// POST /api/upload/session/sign
+// PHX-LAUNCH-001 token-transport migration
 // ------------------------------------------------------------
-// Public endpoint, invitation-only. Enforces MIME allowlist,
-// extension/MIME compatibility, per-file size, and the
-// concurrency-safe per-session file count / total size budget
-// (see upload-flow.service.ts's signUploadObject) before ever
-// calling the storage adapter.
+// Fixed-path invitation-only endpoint. The raw credential is accepted
+// only through Authorization: Bearer and never appears in requestPath.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -15,6 +12,7 @@ import { uploadSignSchema } from '@/lib/intake/schema';
 import {
   newRequestId,
   genericErrorResponse,
+  getUploadBearerToken,
   logIntakeEvent,
   reportInternalError,
   readBoundedJsonBody,
@@ -25,14 +23,15 @@ import {
 
 export const runtime = 'nodejs';
 
-export async function POST(
-  request: Request,
-  { params }: { params: Promise<{ token: string }> }
-): Promise<NextResponse> {
-  const { token } = await params;
+export async function POST(request: Request): Promise<NextResponse> {
   const requestId = newRequestId();
-  const route = 'POST /api/upload/[token]/sign';
+  const route = 'POST /api/upload/session/sign';
+  const token = getUploadBearerToken(request);
 
+  if (!token) {
+    logIntakeEvent({ requestId, route, outcome: 'bearer_missing_or_invalid', statusCode: 404 });
+    return genericErrorResponse(404, 'This upload link is not valid.', requestId);
+  }
   if (!requireJsonContentType(request)) {
     return genericErrorResponse(415, 'Unsupported Media Type.', requestId);
   }

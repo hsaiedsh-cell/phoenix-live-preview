@@ -143,6 +143,20 @@ export function requireJsonContentType(request: Request): boolean {
 }
 
 /**
+ * Extracts the invitation credential from a fixed-path upload API
+ * request. The credential is accepted only as an exact
+ * `Authorization: Bearer <43-char base64url token>` value. Missing,
+ * malformed, multi-value, or differently formatted headers fail
+ * closed and the raw value is never logged or returned.
+ */
+export function getUploadBearerToken(request: Request): string | null {
+  const authorization = request.headers.get('authorization');
+  if (!authorization) return null;
+  const match = /^Bearer ([A-Za-z0-9_-]{43})$/.exec(authorization);
+  return match?.[1] ?? null;
+}
+
+/**
  * R1 (§2.4): rejects a request that Chrome/Edge/Firefox itself has
  * labeled cross-site via the Sec-Fetch-Site header. This header is
  * set by the BROWSER, not readable/forgeable by page JavaScript, so

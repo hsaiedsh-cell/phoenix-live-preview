@@ -1,42 +1,40 @@
 // ============================================================
-// GET /api/upload/:token
-// PHX-LAUNCH-001
+// GET /api/upload/session
+// PHX-LAUNCH-001 token-transport migration
 // ------------------------------------------------------------
-// Public endpoint, but only ever succeeds for a valid, unexpired,
-// unused, non-revoked upload token. Used by the /upload/[token]
-// page to check validity before rendering the upload UI.
+// Fixed-path public endpoint. The invitation credential is supplied
+// only through Authorization: Bearer and is never placed in the URL.
 // ============================================================
 
 import { NextResponse } from 'next/server';
 import { checkUploadToken } from '@/lib/intake/upload-flow.service';
-import { newRequestId, genericErrorResponse, logIntakeEvent, reportInternalError } from '@/lib/intake/http';
+import {
+  newRequestId,
+  genericErrorResponse,
+  getUploadBearerToken,
+  logIntakeEvent,
+  reportInternalError,
+} from '@/lib/intake/http';
 
 export const runtime = 'nodejs';
 
-export async function GET(
-  _request: Request,
-  { params }: { params: Promise<{ token: string }> }
-): Promise<NextResponse> {
-  const { token } = await params;
+export async function GET(request: Request): Promise<NextResponse> {
   const requestId = newRequestId();
-  const route = 'GET /api/upload/[token]';
+  const route = 'GET /api/upload/session';
+  const token = getUploadBearerToken(request);
+
+  if (!token) {
+    logIntakeEvent({ requestId, route, outcome: 'bearer_missing_or_invalid', statusCode: 404 });
+    return genericErrorResponse(404, 'This upload link is not valid.', requestId);
+  }
 
   try {
     const outcome = await checkUploadToken(token);
     if (outcome.kind === 'denied') {
       logIntakeEvent({ requestId, route, outcome: `denied_${outcome.reason}`, statusCode: 404 });
-      // Deliberately the same generic 404 for every denial reason
-      // (invalid/expired/revoked/used) — the public response must
-      // not let an attacker distinguish "this token never existed"
-      // from "this token existed but was already used".
       return genericErrorResponse(404, 'This upload link is not valid.', requestId);
     }
     if (outcome.kind === 'finalized') {
-      // R7 (§4): a minimal receipt for a token whose session has
-      // already been finalized by this workflow -- deliberately
-      // excludes pendingReservations, filenames, storage object keys,
-      // the database request UUID, and any other customer data. This
-      // does not make the token reusable for any mutation.
       logIntakeEvent({ requestId, route, outcome: 'finalized', statusCode: 200 });
       return NextResponse.json(
         {

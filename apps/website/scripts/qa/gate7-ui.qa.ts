@@ -91,10 +91,10 @@ async function main() {
   assert(sitemap.includes("'/privacy'") && sitemap.includes("'/terms'"), 'sitemap.ts includes both /privacy and /terms routes');
 
   section('10. Upload-token page is noindex');
-  const uploadPage = read('src/app/upload/[token]/page.tsx');
+  const uploadPage = read('src/app/upload/page.tsx');
   assert(
     uploadPage.includes('robots:') && uploadPage.includes('index: false') && uploadPage.includes('follow: false'),
-    'the /upload/[token] page metadata sets robots: { index: false, follow: false }'
+    'the fixed /upload page metadata sets robots: { index: false, follow: false }'
   );
 
   section('11. Verified against real Next.js build output (not just source)');
@@ -110,7 +110,7 @@ async function main() {
   }
   if (buildLog) {
     assert(buildLog.includes('/privacy') && buildLog.includes('/terms'), 'the actual `next build` route table includes /privacy and /terms (build-output check)');
-    assert(buildLog.includes('/upload/[token]'), 'the actual `next build` route table includes /upload/[token] (build-output check)');
+    assert(buildLog.includes('/upload'), 'the actual `next build` route table includes the fixed /upload page (build-output check)');
   } else {
     assert(true, 'build-output cross-check skipped in this run (gate10 build log not present at this path) — re-run after Gate 10 to include it');
   }

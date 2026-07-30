@@ -69,7 +69,7 @@ export function payloadFingerprint(normalizedEmail: string, requestType: string,
  * Generates a cryptographically random, non-sequential raw upload
  * token. Only its SHA-256 hash (see tokenHash) is ever persisted;
  * the raw value exists only transiently to build the one-time
- * /upload/<token> URL delivered by email.
+ * /upload#token=<token> URL delivered by email.
  */
 export function generateRawUploadToken(): string {
   return randomBytes(32).toString('base64url');

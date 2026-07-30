@@ -50,11 +50,13 @@ async function main() {
 
   const invitation = buildUploadInvitationEmail({
     publicReference: linkPayload,
-    uploadUrl: 'https://phoenixops.ai/upload/realtoken',
+    uploadUrl: 'https://phoenixops.ai/upload#token=realtoken',
     expiresAt: new Date(),
   });
   assert(!invitation.html.includes('<a href="https://attacker.example">'), 'upload invitation HTML does not contain a raw injected anchor tag from a payload in publicReference');
   assert(invitation.html.includes(escapeHtml(linkPayload)), 'upload invitation HTML contains the escaped form instead');
+  assert(invitation.html.includes('/upload#token=realtoken'), 'upload invitation carries the credential in the URL fragment, not the HTTP path');
+  assert(!invitation.html.includes('/upload/realtoken'), 'upload invitation does not place the credential in the URL path');
 
   section('2. R1 §4.1: escaping is exercised end-to-end through the real submission flow');
   __setTurnstileForTests(createFakeTurnstileVerifier([{ success: true }]));
@@ -144,6 +146,8 @@ async function main() {
       assert(inviteOutcome.kind === 'ok', 'upload session issuance succeeds');
       const inviteMessage = inviteEmail.sentMessages.find((m) => m.subject.startsWith('Upload your files'));
       assert(!!inviteMessage?.idempotencyKey.startsWith('upload-invitation/'), 'upload invitation email idempotency key uses the documented upload-invitation/<sessionId> pattern');
+      assert(!!inviteMessage?.text.includes('/upload#token='), 'the real invitation flow emits a fragment-carried upload credential');
+      assert(!/\/upload\/[A-Za-z0-9_-]{43}/.test(inviteMessage?.text || ''), 'the real invitation flow never emits the raw credential in the HTTP path');
     }
   }
   __resetAdaptersForTests();

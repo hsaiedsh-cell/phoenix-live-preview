@@ -305,6 +305,10 @@ export function sanitizeSentryEvent<T extends SentryErrorEvent | SentryTransacti
   // integration attaches it anyway.
   delete cloned.user;
 
+  // Phoenix privacy baseline: never retain infrastructure host/IP
+  // identifiers, even when attached automatically by the SDK/runtime.
+  delete cloned.server_name;
+
   // R2 (§6): `extra` is an open bag callers/integrations can put
   // anything into -- delete it unconditionally rather than trying to
   // allowlist its contents.

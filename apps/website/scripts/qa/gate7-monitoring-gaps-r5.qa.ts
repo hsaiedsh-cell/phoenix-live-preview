@@ -86,6 +86,36 @@ async function main() {
     'every explicit safe context field survives scrubContext unchanged'
   );
 
+  section('10. Top-level infrastructure identity removal');
+
+  const eventI = {
+    server_name: '169.254.2.229',
+    contexts: {
+      runtime: {
+        name: 'node',
+        version: '24.18.0',
+      },
+    },
+  };
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- synthetic Sentry event shape, this proof only
+  const sanitizedI = sanitizeSentryEvent(eventI as any);
+
+  assert(
+    !('server_name' in sanitizedI),
+    'top-level server_name is removed entirely',
+  );
+
+  assert(
+    !JSON.stringify(sanitizedI).includes('169.254.2.229'),
+    'the infrastructure IP value does not survive anywhere in the sanitized event',
+  );
+
+  assert(
+    (sanitizedI as { contexts?: { runtime?: { name?: string } } }).contexts?.runtime?.name === 'node',
+    'the allowlisted runtime context survives after server_name removal',
+  );
+
   printSummaryAndExit();
 }
 

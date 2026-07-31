@@ -1,13 +1,29 @@
 import type { Metadata } from 'next';
-import { PageHero, ContactFormShell, CTAButton } from '@phoenix/ui';
+import { PageHero, CTAButton } from '@phoenix/ui';
 import { siteConfig } from '@phoenix/config';
+import { IntakeForm } from '@/components/intake/IntakeForm';
 
 export const metadata: Metadata = {
   title: 'Contact',
   description: 'Request an AI readiness assessment or book a demo with Phoenix.',
 };
 
-export default function ContactPage() {
+// Gate 7 requirement: a request-type query parameter preselects the
+// correct option in the form below (e.g. /contact?type=assessment).
+function resolveInitialRequestType(value: string | string[] | undefined): 'assessment' | 'demo' | 'general' {
+  const raw = Array.isArray(value) ? value[0] : value;
+  if (raw === 'assessment' || raw === 'demo' || raw === 'general') return raw;
+  return 'assessment';
+}
+
+export default async function ContactPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ type?: string | string[] }>;
+}) {
+  const resolvedSearchParams = await searchParams;
+  const initialRequestType = resolveInitialRequestType(resolvedSearchParams.type);
+
   return (
     <>
       <PageHero
@@ -29,8 +45,8 @@ export default function ContactPage() {
                   </p>
                 </div>
                 <CTAButton
-                  label="Request Assessment"
-                  href="mailto:hello@phoenixops.ai?subject=Phoenix%20Assessment%20Request"
+                  label="Prefer email?"
+                  href={`mailto:${siteConfig.email}?subject=Phoenix%20Assessment%20Request`}
                   variant="secondary"
                   size="sm"
                 />
@@ -43,8 +59,8 @@ export default function ContactPage() {
                   </p>
                 </div>
                 <CTAButton
-                  label="Book a Demo"
-                  href="mailto:hello@phoenixops.ai?subject=Phoenix%20Demo%20Request"
+                  label="Prefer email?"
+                  href={`mailto:${siteConfig.email}?subject=Phoenix%20Demo%20Request`}
                   variant="primary"
                   size="sm"
                 />
@@ -57,7 +73,7 @@ export default function ContactPage() {
             </div>
           </div>
 
-          <ContactFormShell />
+          <IntakeForm initialRequestType={initialRequestType} />
         </div>
       </section>
     </>

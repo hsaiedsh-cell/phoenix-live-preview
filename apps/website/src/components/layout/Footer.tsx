@@ -41,7 +41,15 @@ export function Footer() {
           <p className="text-xs text-gray-500">
             © {new Date().getFullYear()} Phoenix. All rights reserved.
           </p>
-          <p className="text-xs text-gray-500">phoenixops.ai</p>
+          <div className="flex items-center gap-6">
+            <Link href="/privacy" className="text-xs text-gray-500 hover:text-white transition-colors duration-150">
+              Privacy
+            </Link>
+            <Link href="/terms" className="text-xs text-gray-500 hover:text-white transition-colors duration-150">
+              Terms
+            </Link>
+            <p className="text-xs text-gray-500">phoenixops.ai</p>
+          </div>
         </div>
       </div>
     </footer>

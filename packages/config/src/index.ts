@@ -2,12 +2,21 @@
 // @phoenix/config — Shared Configuration
 // ============================================================
 
+// PHX-LAUNCH-001: url and email are now environment-driven, falling
+// back to the existing hard-coded defaults below. Every app in this
+// monorepo that imports siteConfig (website, platform, dashboard)
+// keeps its exact current behavior unless it explicitly sets
+// NEXT_PUBLIC_SITE_URL / NEXT_PUBLIC_CONTACT_EMAIL in its own Vercel
+// project — apps/platform and apps/dashboard are out of scope for
+// this sprint and are not being given those variables, so their
+// build output is unchanged. Next.js inlines NEXT_PUBLIC_* at each
+// app's own build time, so this is safe to share across apps.
 export const siteConfig = {
   name: 'Phoenix',
   tagline: 'Where AI Becomes Business Ready.',
-  url: 'https://phoenixops.ai',
+  url: process.env.NEXT_PUBLIC_SITE_URL || 'https://phoenixops.ai',
   description: 'Phoenix helps enterprises transform AI-generated outputs into trusted, validated, business-ready assets through structured assessments, enterprise standards, and intelligent workflows.',
-  email: 'hello@phoenixops.ai',
+  email: process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'hello@phoenixops.ai',
   social: {
     linkedin: 'https://linkedin.com/company/phoenixops',
   },

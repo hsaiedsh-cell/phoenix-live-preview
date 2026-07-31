@@ -57,3 +57,23 @@ Supabase project (apply the migration, create the private Storage bucket),
 verify the Resend sending domain, create the Cloudflare Turnstile site, wire
 Sentry, and re-run this sprint's full Gate 4–9 QA suite against those real,
 hosted credentials before any Private Beta customer is invited.
+
+## Post-Merge Release Reconciliation
+
+The implementation and limitation sections above describe the pre-deployment
+state at the time this release note was originally written.
+
+The later merge, hosted-provider verification, live secure-upload lifecycle,
+Vercel request-path privacy remediation, Sentry privacy validation, release
+tagging, and Production-access containment are recorded in:
+
+`docs/launch/PHX_LAUNCH_001_POST_MERGE_RECONCILIATION.md`
+
+Final release classification:
+
+```text
+Merged: yes
+Tag: phx-launch-001-private-beta
+Public Production launch: no
+Access state: protected
+```

@@ -122,3 +122,67 @@ export async function listEventsForRequest(requestId: string): Promise<IntakeEve
     [requestId]
   );
 }
+
+// ============================================================
+// PHX-LAUNCH-002 R2 — sanitized operator-action history
+// ============================================================
+
+const OPERATOR_ACTION_STATUSES = [
+  'received',
+  'under_review',
+  'upload_invited',
+  'files_received',
+  'quoted',
+  'accepted',
+  'rejected',
+  'closed',
+] as const;
+
+export interface OperatorActionHistoryItem {
+  eventId: string;
+  actorUserId: string;
+  from: string;
+  to: string;
+  createdAt: string;
+}
+
+interface OperatorActionHistoryRow {
+  event_id: string;
+  actor_user_id: string;
+  from_status: string;
+  to_status: string;
+  created_at: Date;
+}
+
+const UUID_SQL_PATTERN =
+  '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$';
+
+export async function listOperatorActionsForRequest(
+  requestId: string
+): Promise<OperatorActionHistoryItem[]> {
+  const rows = await intakeQuery<OperatorActionHistoryRow>(
+    `SELECT
+       id AS event_id,
+       detail->>'actorUserId' AS actor_user_id,
+       detail->>'from' AS from_status,
+       detail->>'to' AS to_status,
+       created_at
+     FROM public_intake_events
+     WHERE request_id = $1
+       AND event_type = 'request.status_changed'
+       AND detail->>'source' = 'phoenix_backend'
+       AND detail->>'actorUserId' ~* $2
+       AND detail->>'from' = ANY($3::text[])
+       AND detail->>'to' = ANY($3::text[])
+     ORDER BY created_at ASC, id ASC`,
+    [requestId, UUID_SQL_PATTERN, OPERATOR_ACTION_STATUSES]
+  );
+
+  return rows.map((row) => ({
+    eventId: row.event_id,
+    actorUserId: row.actor_user_id,
+    from: row.from_status,
+    to: row.to_status,
+    createdAt: row.created_at.toISOString(),
+  }));
+}

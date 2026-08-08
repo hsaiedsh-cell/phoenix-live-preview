@@ -8,6 +8,11 @@
 
 import { intakeQuery, type TransactionQuery } from '../db';
 import { generatePublicReference } from '../reference';
+import {
+  decodeOperatorQueueCursor,
+  encodeOperatorQueueCursor,
+  type OperatorQueueQueryInput,
+} from '../schema';
 
 export type IntakeRequestStatus =
   | 'received'
@@ -205,4 +210,293 @@ export async function listRequests(limit = 50): Promise<IntakeRequestRow[]> {
     `SELECT * FROM public_intake_requests ORDER BY created_at DESC LIMIT $1`,
     [Math.min(limit, 200)]
   );
+}
+
+// ============================================================
+// PHX-LAUNCH-002 R2 — privacy-minimized operator read model
+// ============================================================
+
+export type OperatorUploadSessionStatus = 'active' | 'used' | 'revoked' | 'expired';
+
+export interface OperatorQueueItem {
+  requestId: string;
+  publicReference: string;
+  status: IntakeRequestStatus;
+  requestType: string;
+  company: string;
+  createdAt: string;
+  updatedAt: string;
+  fileCount: number;
+  uploadSessionStatus: OperatorUploadSessionStatus | null;
+}
+
+export interface OperatorQueueResult {
+  items: OperatorQueueItem[];
+  total: number;
+  nextCursor: string | null;
+}
+
+interface OperatorQueueRow {
+  request_id: string;
+  public_reference: string;
+  status: IntakeRequestStatus;
+  request_type: string;
+  company: string;
+  created_at: Date;
+  updated_at: Date;
+  file_count: number;
+  upload_session_status: OperatorUploadSessionStatus | null;
+}
+
+interface OperatorQueueSql {
+  whereSql: string;
+  values: unknown[];
+}
+
+export function escapeOperatorQueueSearch(value: string): string {
+  return value.replace(/[\\%_]/g, (character) => `\\${character}`);
+}
+
+function addOperatorQueueValue(values: unknown[], value: unknown): string {
+  values.push(value);
+  return `$${values.length}`;
+}
+
+function buildOperatorQueueSql(
+  input: OperatorQueueQueryInput,
+  includeCursor: boolean
+): OperatorQueueSql {
+  const clauses: string[] = [];
+  const values: unknown[] = [];
+  const search = input.search?.trim();
+
+  if (search) {
+    const parameter = addOperatorQueueValue(
+      values,
+      `%${escapeOperatorQueueSearch(search)}%`
+    );
+    clauses.push(`(
+      r.public_reference ILIKE ${parameter} ESCAPE '\\'
+      OR r.company ILIKE ${parameter} ESCAPE '\\'
+      OR (r.first_name || ' ' || r.last_name) ILIKE ${parameter} ESCAPE '\\'
+      OR r.work_email_normalized::text ILIKE ${parameter} ESCAPE '\\'
+    )`);
+  }
+
+  if (input.statuses.length > 0) {
+    const parameter = addOperatorQueueValue(values, input.statuses);
+    clauses.push(`r.status = ANY(${parameter}::text[])`);
+  }
+
+  if (input.requestTypes.length > 0) {
+    const parameter = addOperatorQueueValue(values, input.requestTypes);
+    clauses.push(`r.request_type = ANY(${parameter}::text[])`);
+  }
+
+  if (input.createdFrom) {
+    const parameter = addOperatorQueueValue(values, input.createdFrom);
+    clauses.push(`r.created_at >= ${parameter}::timestamptz`);
+  }
+
+  if (input.createdTo) {
+    const parameter = addOperatorQueueValue(values, input.createdTo);
+    clauses.push(`r.created_at <= ${parameter}::timestamptz`);
+  }
+
+  if (includeCursor && input.cursor) {
+    const cursor = decodeOperatorQueueCursor(input.cursor);
+    if (!cursor) throw new Error('invalid_operator_queue_cursor');
+
+    const createdAtParameter = addOperatorQueueValue(values, cursor.createdAt);
+    const requestIdParameter = addOperatorQueueValue(values, cursor.requestId);
+    clauses.push(
+      `(r.created_at, r.id) < (${createdAtParameter}::timestamptz, ${requestIdParameter}::uuid)`
+    );
+  }
+
+  return {
+    whereSql: clauses.length > 0 ? `WHERE ${clauses.join('\n      AND ')}` : '',
+    values,
+  };
+}
+
+export async function queryOperatorQueue(
+  input: OperatorQueueQueryInput
+): Promise<OperatorQueueResult> {
+  const countSql = buildOperatorQueueSql(input, false);
+  const countRows = await intakeQuery<{ total: string }>(
+    `SELECT count(*)::text AS total
+     FROM public_intake_requests r
+     ${countSql.whereSql}`,
+    countSql.values
+  );
+
+  const pageSql = buildOperatorQueueSql(input, true);
+  const fetchLimit = input.limit + 1;
+  const limitParameter = addOperatorQueueValue(pageSql.values, fetchLimit);
+
+  const rows = await intakeQuery<OperatorQueueRow>(
+    `SELECT
+       r.id AS request_id,
+       r.public_reference,
+       r.status,
+       r.request_type,
+       r.company,
+       r.created_at,
+       r.updated_at,
+       COALESCE(file_summary.file_count, 0)::int AS file_count,
+       latest_session.status AS upload_session_status
+     FROM public_intake_requests r
+     LEFT JOIN LATERAL (
+       SELECT
+         session.id,
+         session.status
+       FROM public_upload_sessions session
+       WHERE session.request_id = r.id
+       ORDER BY session.created_at DESC, session.id DESC
+       LIMIT 1
+     ) latest_session ON true
+     LEFT JOIN LATERAL (
+       SELECT count(*)::int AS file_count
+       FROM public_intake_files file
+       WHERE file.upload_session_id = latest_session.id
+         AND file.reservation_status = 'completed'
+     ) file_summary ON true
+     ${pageSql.whereSql}
+     ORDER BY r.created_at DESC, r.id DESC
+     LIMIT ${limitParameter}`,
+    pageSql.values
+  );
+
+  const hasNextPage = rows.length > input.limit;
+  const visibleRows = rows.slice(0, input.limit);
+  const lastRow = visibleRows[visibleRows.length - 1];
+
+  return {
+    items: visibleRows.map((row) => ({
+      requestId: row.request_id,
+      publicReference: row.public_reference,
+      status: row.status,
+      requestType: row.request_type,
+      company: row.company,
+      createdAt: row.created_at.toISOString(),
+      updatedAt: row.updated_at.toISOString(),
+      fileCount: row.file_count,
+      uploadSessionStatus: row.upload_session_status,
+    })),
+    total: Number(countRows[0]?.total ?? 0),
+    nextCursor:
+      hasNextPage && lastRow
+        ? encodeOperatorQueueCursor({
+            createdAt: lastRow.created_at.toISOString(),
+            requestId: lastRow.request_id,
+          })
+        : null,
+  };
+}
+
+export interface OperatorRequestDetail {
+  requestId: string;
+  publicReference: string;
+  requestType: string;
+  status: IntakeRequestStatus;
+  firstName: string;
+  lastName: string;
+  workEmail: string;
+  company: string;
+  role: string;
+  phone: string | null;
+  country: string | null;
+  estimatedTimeline: string | null;
+  message: string;
+  createdAt: string;
+  updatedAt: string;
+  fileCount: number;
+  uploadSessionStatus: OperatorUploadSessionStatus | null;
+}
+
+interface OperatorRequestDetailRow {
+  request_id: string;
+  public_reference: string;
+  request_type: string;
+  status: IntakeRequestStatus;
+  first_name: string;
+  last_name: string;
+  work_email: string;
+  company: string;
+  role: string;
+  phone: string | null;
+  country: string | null;
+  estimated_timeline: string | null;
+  message: string;
+  created_at: Date;
+  updated_at: Date;
+  file_count: number;
+  upload_session_status: OperatorUploadSessionStatus | null;
+}
+
+export async function findOperatorRequestDetailById(
+  requestId: string
+): Promise<OperatorRequestDetail | null> {
+  const rows = await intakeQuery<OperatorRequestDetailRow>(
+    `SELECT
+       r.id AS request_id,
+       r.public_reference,
+       r.request_type,
+       r.status,
+       r.first_name,
+       r.last_name,
+       r.work_email_normalized::text AS work_email,
+       r.company,
+       r.role,
+       r.phone,
+       r.country,
+       r.estimated_timeline,
+       r.message,
+       r.created_at,
+       r.updated_at,
+       COALESCE(file_summary.file_count, 0)::int AS file_count,
+       latest_session.status AS upload_session_status
+     FROM public_intake_requests r
+     LEFT JOIN LATERAL (
+       SELECT
+         session.id,
+         session.status
+       FROM public_upload_sessions session
+       WHERE session.request_id = r.id
+       ORDER BY session.created_at DESC, session.id DESC
+       LIMIT 1
+     ) latest_session ON true
+     LEFT JOIN LATERAL (
+       SELECT count(*)::int AS file_count
+       FROM public_intake_files file
+       WHERE file.upload_session_id = latest_session.id
+         AND file.reservation_status = 'completed'
+     ) file_summary ON true
+     WHERE r.id = $1`,
+    [requestId]
+  );
+
+  const row = rows[0];
+  if (!row) return null;
+
+  return {
+    requestId: row.request_id,
+    publicReference: row.public_reference,
+    requestType: row.request_type,
+    status: row.status,
+    firstName: row.first_name,
+    lastName: row.last_name,
+    workEmail: row.work_email,
+    company: row.company,
+    role: row.role,
+    phone: row.phone,
+    country: row.country,
+    estimatedTimeline: row.estimated_timeline,
+    message: row.message,
+    createdAt: row.created_at.toISOString(),
+    updatedAt: row.updated_at.toISOString(),
+    fileCount: row.file_count,
+    uploadSessionStatus: row.upload_session_status,
+  };
 }

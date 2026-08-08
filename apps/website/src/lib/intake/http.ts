@@ -15,7 +15,7 @@
 //     from its constructor name.
 // ============================================================
 
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID, timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { MAX_REQUEST_BODY_BYTES } from './schema';
 import { getMonitoringAdapter } from './adapters';
@@ -156,6 +156,64 @@ export function getUploadBearerToken(request: Request): string | null {
   return match?.[1] ?? null;
 }
 
+const INTAKE_SERVICE_BEARER_PATTERN = /^Bearer ([\x21-\x2B\x2D-\x7E]+)$/;
+const PHOENIX_REQUEST_ID_PATTERN = /^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$/;
+
+function digestIntakeServiceSecret(value: string): Buffer {
+  return createHash('sha256').update(value, 'utf8').digest();
+}
+
+/**
+ * Extracts the dedicated Backend-to-Website service credential.
+ *
+ * Only one exact `Authorization: Bearer <credential>` value is
+ * accepted. Wrong-case schemes, leading/trailing whitespace, embedded
+ * whitespace, comma-joined duplicate values, and empty credentials all
+ * fail closed. The raw header value is never logged or returned.
+ */
+export function getIntakeServiceBearerToken(request: Request): string | null {
+  const authorization = request.headers.get('authorization');
+  if (!authorization || authorization.includes(',')) return null;
+  const match = INTAKE_SERVICE_BEARER_PATTERN.exec(authorization);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Validates the dedicated R2 service credential without falling back
+ * to INTAKE_OPS_SECRET. SHA-256 normalizes both inputs to equal-length
+ * buffers before Node's timingSafeEqual comparison, so even a
+ * wrong-length credential follows the constant-time comparison path.
+ */
+export function isValidIntakeServiceRequest(request: Request): boolean {
+  const provided = getIntakeServiceBearerToken(request);
+  const expected = serverConfig.intakeServiceSecret;
+  if (!provided || !expected) return false;
+
+  return timingSafeEqual(
+    digestIntakeServiceSecret(provided),
+    digestIntakeServiceSecret(expected)
+  );
+}
+
+/**
+ * Accepts the Backend correlation identifier only when it is a bounded
+ * ASCII token. Missing, malformed, comma-joined, whitespace-bearing,
+ * or oversized values are replaced with a fresh UUID rather than
+ * reflected into logs or response bodies.
+ */
+export function getIntakeServiceRequestId(request: Request): string {
+  const incoming = request.headers.get('x-phoenix-request-id');
+  if (!incoming || !PHOENIX_REQUEST_ID_PATTERN.test(incoming)) {
+    return newRequestId();
+  }
+  return incoming;
+}
+
+/** Generic fail-closed response for dedicated Website service routes. */
+export function intakeServiceUnauthorizedResponse(requestId: string): NextResponse {
+  return genericErrorResponse(401, 'Unauthorized.', requestId);
+}
+
 /**
  * R1 (§2.4): rejects a request that Chrome/Edge/Firefox itself has
  * labeled cross-site via the Sec-Fetch-Site header. This header is
@@ -285,4 +343,38 @@ export function extractClientIp(request: Request): string | null {
   const realIp = request.headers.get('x-real-ip');
   if (realIp) return realIp.trim();
   return null;
+}
+
+// ============================================================
+// PHX-LAUNCH-002 R2 — service actor attribution
+// ============================================================
+
+const INTAKE_SERVICE_ACTOR_USER_ID_HEADER =
+  'x-phoenix-actor-user-id';
+const INTAKE_SERVICE_ACTOR_UUID_PATTERN =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/**
+ * Reads the database-derived Backend operator UUID carried only by
+ * the authenticated internal status-action request.
+ *
+ * This value is audit attribution, not an authentication, role, or
+ * authorization claim. Callers must validate the dedicated service
+ * credential before using this helper.
+ */
+export function getIntakeServiceActorUserId(
+  request: Pick<Request, 'headers'>
+): string | null {
+  const incoming = request.headers.get(
+    INTAKE_SERVICE_ACTOR_USER_ID_HEADER
+  );
+
+  if (
+    !incoming ||
+    !INTAKE_SERVICE_ACTOR_UUID_PATTERN.test(incoming)
+  ) {
+    return null;
+  }
+
+  return incoming.toLowerCase();
 }

@@ -72,6 +72,14 @@ export const serverConfig = {
   get sentryDsn(): string | undefined {
     return optionalServerEnv('SENTRY_DSN');
   },
+  // Dedicated Backend-to-Website service credential for
+  // PHX-LAUNCH-002-R2 internal operations routes. It is optional at
+  // module-load time so builds and unrelated public routes do not
+  // require a deployed secret; service authentication fails closed
+  // whenever it is absent.
+  get intakeServiceSecret(): string | undefined {
+    return optionalServerEnv('INTAKE_SERVICE_SECRET')?.trim() || undefined;
+  },
   // Shared secret required on the two internal-only routes
   // (/api/intake/:id/finalize and /api/intake/:id/upload-session).
   // These are never called from browser code — only from the

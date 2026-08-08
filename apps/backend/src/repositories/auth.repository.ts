@@ -24,10 +24,13 @@ import type { RequestActor, WorkspaceMembershipStatus, WorkspaceRole } from '../
 
 // ---- getUserById ----------------------------------------------------
 
+export type PlatformRole = 'SuperAdmin' | 'StandardUser' | 'ServiceAccount';
+
 export interface UserRecord {
   id: string;
   email: string;
   displayName: string;
+  platformRole: PlatformRole;
   deleted: boolean;
 }
 
@@ -35,6 +38,7 @@ interface UserRow {
   id: string;
   email: string;
   display_name: string;
+  platform_role: PlatformRole;
 }
 
 /**
@@ -48,7 +52,7 @@ interface UserRow {
 export async function getUserById(userId: string): Promise<UserRecord | null> {
   const pool = getDatabasePool();
   const result = await pool.query<UserRow>(
-    `SELECT id, email, display_name
+    `SELECT id, email, display_name, platform_role
      FROM users
      WHERE id = $1 AND deleted_at IS NULL
      LIMIT 1`,
@@ -56,7 +60,15 @@ export async function getUserById(userId: string): Promise<UserRecord | null> {
   );
 
   const row = result.rows[0];
-  return row ? { id: row.id, email: row.email, displayName: row.display_name, deleted: false } : null;
+  return row
+    ? {
+        id: row.id,
+        email: row.email,
+        displayName: row.display_name,
+        platformRole: row.platform_role,
+        deleted: false,
+      }
+    : null;
 }
 
 // ---- getWorkspaceMembership -------------------------------------------

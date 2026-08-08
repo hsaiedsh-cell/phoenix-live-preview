@@ -19,6 +19,7 @@ import { certificationsRouter } from './certifications';
 import { reportsRouter } from './reports';
 import { activityRouter } from './activity';
 import { auditRouter } from './audit';
+import { intakeOperationsRouter } from './intake-operations';
 
 export function registerRoutes(app: Express): void {
   // Foundation endpoints — active this sprint.
@@ -41,4 +42,5 @@ export function registerRoutes(app: Express): void {
   // each module's file header.
   app.use('/api', activityRouter);
   app.use('/api', auditRouter);
+  app.use('/api', intakeOperationsRouter);
 }

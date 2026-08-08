@@ -115,6 +115,69 @@ export async function getRequestUserId(req: Request, res: Response): Promise<str
   return resolution.userId;
 }
 
+export interface PlatformSuperAdminActor {
+  id: string;
+  email: string;
+  displayName: string;
+  platformRole: 'SuperAdmin';
+}
+
+/**
+ * Resolves one authenticated Phoenix user and enforces the global
+ * database-owned `SuperAdmin` platform role.
+ *
+ * This guard is intentionally separate from workspace membership and
+ * permission resolution. Private Beta intake operations exist before a
+ * customer workspace may exist, so no workspace id, membership row, or
+ * workspace role participates in this decision.
+ */
+export async function requirePlatformSuperAdmin(
+  req: Request,
+  res: Response
+): Promise<PlatformSuperAdminActor | null> {
+  const resolution = await getActorResolver().resolveUserId(req);
+  if (!resolution.ok) {
+    writeAuthResolutionFailure(res, resolution);
+    return null;
+  }
+
+  if (!(await requireDatabase(res))) return null;
+
+  const user = await getUserById(resolution.userId);
+  if (!user) {
+    res
+      .status(401)
+      .json(
+        failure(
+          ApiErrorCodes.AUTH_REQUIRED,
+          'No Phoenix user was found for the authenticated identity.',
+          getRequestId(res)
+        )
+      );
+    return null;
+  }
+
+  if (user.platformRole !== 'SuperAdmin') {
+    res
+      .status(403)
+      .json(
+        failure(
+          ApiErrorCodes.FORBIDDEN,
+          'This operation requires the SuperAdmin platform role.',
+          getRequestId(res)
+        )
+      );
+    return null;
+  }
+
+  return {
+    id: user.id,
+    email: user.email,
+    displayName: user.displayName,
+    platformRole: 'SuperAdmin',
+  };
+}
+
 /**
  * Resolves a full RequestActor for the request, scoped to
  * `workspaceId`. Performs, in order:

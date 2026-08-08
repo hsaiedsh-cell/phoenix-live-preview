@@ -148,13 +148,15 @@ export async function resolveProductionAuthState(): Promise<ProductionAuthState>
     const email = user?.primaryEmailAddress?.emailAddress ?? null;
 
     return { mode: 'signed-in', clerkUserId: userId, email };
-  } catch (err) {
+  } catch {
     // Reachable only for a genuine Clerk SDK/runtime error with a FULLY
     // CONFIGURED setup (e.g. transient network issue reaching Clerk) —
     // config-missing is now handled above and never falls through to
     // here. Still fails safe to signed-out rather than a 500, but this is
     // no longer the path a missing CLERK_SECRET_KEY takes.
-    console.error('[platform-auth.server] Failed to resolve Clerk session:', err);
+    // Clerk failures can contain request, identity, or token-adjacent data.
+    // Preserve only a stable operational event; never log the raw SDK error.
+    console.error('[platform-auth.server] Failed to resolve Clerk session.');
     return { mode: 'signed-out' };
   }
 }

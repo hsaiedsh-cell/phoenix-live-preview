@@ -32,3 +32,27 @@ provider-managed backup/restore drill.
    the separate Go/No-Go decision.
 
 Until every item is evidenced, keep registration closed and access invite-only.
+
+## Hosted Validation — 2026-08-09
+
+The PR #6 Vercel deployments for Website and Platform both reached `READY` and
+were protected by Vercel Authentication. Browser verification established:
+
+- the Website home and contact form rendered without console errors;
+- the Platform rejected an anonymous request to the operator route;
+- the Clerk sign-in UI loaded and public sign-up did not open a registration
+  flow;
+- a real Clerk session reached `/dashboard` and resolved the configured
+  `Acme Enterprise Workspace` preview identity.
+
+The hosted pass also found two remaining blockers. The Supabase connection
+failed with a tenant/host lookup error, so live database reads did not pass.
+Before this correction the raw provider error was rendered in the UI; the R8
+privacy regression now forces a stable generic customer message instead. Also,
+the operator page correctly reports that its API is unavailable in
+`vercel-supabase-preview`; a hosted `production-auth` Platform plus Backend is
+still required for the R2/R3/R6/R7 end-to-end path.
+
+Accordingly, the Hosted Private Beta decision remains **No-Go**. This validation
+does not claim successful Supabase reads, hosted Backend OIDC, operator actions,
+invitation-provider delivery, monitoring ingestion, or backup/restore.

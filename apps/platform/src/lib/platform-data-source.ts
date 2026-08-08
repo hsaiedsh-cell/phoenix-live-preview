@@ -202,14 +202,19 @@ function errorToLiveResult<T>(err: unknown, mode: PlatformDataMode): LiveResult<
     if (err.code === 'PERMISSION_DENIED') return { status: 'permission-denied', mode, message: err.message };
     if (err.code === 'NOT_FOUND') return { status: 'not-found', mode, message: err.message };
     // BACKEND_UNAVAILABLE, DB_UNAVAILABLE, VALIDATION_ERROR, CONFLICT,
-    // BACKEND_ERROR, NOT_IMPLEMENTED — all surfaced as a generic
-    // "backend unavailable"-shaped state; the message carries specifics.
-    return { status: 'backend-unavailable', mode, message: err.message };
+    // BACKEND_ERROR, NOT_IMPLEMENTED — all surfaced as a privacy-safe
+    // generic state. Raw provider/DB errors can contain hostnames, tenant
+    // identifiers, SQL fragments, or other infrastructure details.
+    return {
+      status: 'backend-unavailable',
+      mode,
+      message: 'Live Phoenix data is temporarily unavailable. Please try again later.',
+    };
   }
   return {
     status: 'backend-unavailable',
     mode,
-    message: err instanceof Error ? err.message : 'Unknown error contacting the backend.',
+    message: 'Live Phoenix data is temporarily unavailable. Please try again later.',
   };
 }
 

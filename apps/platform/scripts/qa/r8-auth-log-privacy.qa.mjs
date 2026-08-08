@@ -26,5 +26,19 @@ for (const file of files) {
   );
 }
 
+const dataSource = readFileSync(resolve(process.cwd(), 'src/lib/platform-data-source.ts'), 'utf8');
+const errorMapperStart = dataSource.indexOf('function errorToLiveResult');
+const errorMapperEnd = dataSource.indexOf('// ---------------------------------------------------------------------------', errorMapperStart);
+const errorMapper = dataSource.slice(errorMapperStart, errorMapperEnd);
+check(errorMapperStart >= 0 && errorMapperEnd > errorMapperStart, 'live error mapper is present');
+check(
+  !/status:\s*'backend-unavailable'[\s\S]{0,160}message:\s*err\.message/.test(errorMapper),
+  'backend-unavailable states never expose a raw provider error message'
+);
+check(
+  errorMapper.includes('Live Phoenix data is temporarily unavailable. Please try again later.'),
+  'backend-unavailable states retain a privacy-safe customer message'
+);
+
 console.log(`\n${passed} passed.`);
 console.log('RESULT: PHX-LAUNCH-002-R8 AUTH LOG PRIVACY QA PASSED');

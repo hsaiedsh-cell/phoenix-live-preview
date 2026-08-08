@@ -117,6 +117,18 @@ export async function realGetWorkspace(workspaceId: string): Promise<BackendWork
   return serverFetch<BackendWorkspace>(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
 }
 
+export interface IdentityWorkspace {
+  workspaceId: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  role: string;
+}
+
+export async function realGetMyWorkspaces(): Promise<{ items: IdentityWorkspace[]; total: number }> {
+  return serverFetch('/api/me/workspaces');
+}
+
 export async function realGetAssessments(
   workspaceId: string
 ): Promise<BackendPaginatedResult<BackendAssessment>> {

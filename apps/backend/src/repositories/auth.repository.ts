@@ -80,6 +80,29 @@ export interface WorkspaceMembershipRecord {
   status: WorkspaceMembershipStatus;
 }
 
+export interface IdentityWorkspaceRecord {
+  workspaceId: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  role: WorkspaceRole;
+}
+
+export async function listActiveWorkspacesForUser(userId: string): Promise<IdentityWorkspaceRecord[]> {
+  const result = await getDatabasePool().query<{
+    workspace_id: string; organization_id: string; name: string; slug: string; role: string;
+  }>(
+    `SELECT w.id AS workspace_id,w.organization_id,w.name,w.slug,wu.role
+     FROM workspace_users wu JOIN workspaces w ON w.id=wu.workspace_id
+     WHERE wu.user_id=$1 AND wu.status='Active' AND wu.deleted_at IS NULL AND w.deleted_at IS NULL
+     ORDER BY w.created_at ASC,w.id ASC`, [userId]
+  );
+  return result.rows.map((row) => ({
+    workspaceId: row.workspace_id, organizationId: row.organization_id,
+    name: row.name, slug: row.slug, role: row.role as WorkspaceRole,
+  }));
+}
+
 interface WorkspaceMembershipRow {
   user_id: string;
   workspace_id: string;

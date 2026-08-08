@@ -21,6 +21,7 @@ import { activityRouter } from './activity';
 import { auditRouter } from './audit';
 import { intakeOperationsRouter } from './intake-operations';
 import { intakeProvisioningRouter } from './intake-provisioning';
+import { onboardingInvitationsRouter } from './onboarding-invitations';
 
 export function registerRoutes(app: Express): void {
   // Foundation endpoints — active this sprint.
@@ -45,4 +46,5 @@ export function registerRoutes(app: Express): void {
   app.use('/api', auditRouter);
   app.use('/api', intakeOperationsRouter);
   app.use('/api', intakeProvisioningRouter);
+  app.use('/api', onboardingInvitationsRouter);
 }

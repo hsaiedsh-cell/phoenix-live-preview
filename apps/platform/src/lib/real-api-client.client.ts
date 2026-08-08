@@ -39,6 +39,7 @@ import {
   backendErrorToRealApiError,
   RealApiConfigError,
   RealApiAuthRequiredError,
+  RealApiError,
   type BackendPaginatedResult,
   type BackendWorkspace,
   type BackendAssessment,
@@ -96,6 +97,23 @@ async function resolveClientAuthHeaders(): Promise<Record<string, string>> {
   }
 
   throw new RealApiConfigError(`Client-side real reads are not reachable in '${config.mode}' mode.`);
+}
+
+export async function realAcceptOnboardingInvitation(token: string): Promise<{ status: 'Accepted'; workspaceId: string }> {
+  const { baseUrl } = getPhoenixApiConfig();
+  if (!baseUrl) throw new RealApiConfigError('No backend URL configured for invitation acceptance.');
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/onboarding-invitations/accept`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }), credentials: 'omit', cache: 'no-store',
+    });
+  } catch {
+    throw new RealApiError(0, 'BACKEND_UNAVAILABLE', 'The invitation service is temporarily unavailable.');
+  }
+  const envelope = await response.json() as { ok: boolean; data?: { status: 'Accepted'; workspaceId: string }; error?: { code?: string; message?: string } };
+  if (!response.ok || !envelope.ok || !envelope.data) throw backendErrorToRealApiError(response.status, envelope.error);
+  return envelope.data;
 }
 
 async function clientFetch<T>(path: string): Promise<T> {

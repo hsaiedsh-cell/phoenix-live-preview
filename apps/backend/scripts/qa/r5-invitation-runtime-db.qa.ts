@@ -5,6 +5,7 @@ import {
   reissueOnboardingInvitation,
   revokeOnboardingInvitation,
 } from '../../src/services/onboarding-invitation.service';
+import { deliverOnboardingInvitation } from '../../src/services/onboarding-invitation-delivery.service';
 
 const OPERATOR = '11111111-1111-4111-8111-111111111111';
 let passed = 0;
@@ -38,6 +39,15 @@ async function main(): Promise<void> {
   check(issued.token.length >= 40, 'issuance returns one high-entropy delivery token');
   const persisted = await pool.query<{ token_hash: string }>('SELECT token_hash FROM onboarding_invitations WHERE id=$1', [issued.invitationId]);
   check(persisted.rows[0]?.token_hash !== issued.token && persisted.rows[0]?.token_hash.length === 64, 'database stores only the token hash');
+  let deliveredUrl = '';
+  process.env.PHOENIX_ONBOARDING_APP_BASE_URL = 'https://platform.example.test';
+  const delivery = await deliverOnboardingInvitation(issued, {
+    async send(input) { deliveredUrl = input.acceptUrl; return { ok: true, providerCode: 'fake' }; },
+  });
+  check(delivery.status === 'Sent' && deliveredUrl.includes('#token=') && !deliveredUrl.includes('?token='),
+    'delivery sends the token in a URL fragment, never a query string');
+  check((await pool.query<{ status: string }>('SELECT status FROM onboarding_invitation_deliveries WHERE invitation_id=$1', [issued.invitationId])).rows[0]?.status === 'Sent',
+    'successful provider call commits bounded Sent state');
   const accepted = await acceptOnboardingInvitation(issued.token);
   check(accepted.status === 'Accepted', 'valid token is accepted');
   check((await pool.query<{ status: string }>('SELECT status FROM workspace_users WHERE id=$1', [membershipId])).rows[0]?.status === 'Active',

@@ -9,6 +9,7 @@ import {
   reissueOnboardingInvitation,
   revokeOnboardingInvitation,
 } from '../services/onboarding-invitation.service';
+import { deliverOnboardingInvitation } from '../services/onboarding-invitation-delivery.service';
 import {
   AcceptInvitationBodySchema,
   InvitationIdParamsSchema,
@@ -43,8 +44,12 @@ onboardingInvitationsRouter.post('/operations/onboarding-invitations', asyncHand
   const parsed = IssueInvitationBodySchema.safeParse(req.body);
   if (!parsed.success) return sendValidationError(res, formatZodIssues(parsed.error));
   try {
-    const result = await issueOnboardingInvitation(parsed.data.membershipId, parsed.data.expiresInHours, actor.id);
-    res.status(201).json(success(result, getRequestId(res)));
+    const issued = await issueOnboardingInvitation(parsed.data.membershipId, parsed.data.expiresInHours, actor.id);
+    const delivery = await deliverOnboardingInvitation(issued);
+    res.status(201).json(success({
+      invitationId: issued.invitationId, membershipId: issued.membershipId,
+      workspaceId: issued.workspaceId, expiresAt: issued.expiresAt, deliveryStatus: delivery.status,
+    }, getRequestId(res)));
   } catch (error) {
     if (!writeLifecycleError(error, res)) throw error;
   }
@@ -70,8 +75,12 @@ onboardingInvitationsRouter.post('/operations/onboarding-invitations/:invitation
   if (!params.success) return sendValidationError(res, formatZodIssues(params.error));
   if (!body.success) return sendValidationError(res, formatZodIssues(body.error));
   try {
-    const result = await reissueOnboardingInvitation(params.data.invitationId, body.data.expiresInHours, actor.id);
-    res.status(201).json(success(result, getRequestId(res)));
+    const issued = await reissueOnboardingInvitation(params.data.invitationId, body.data.expiresInHours, actor.id);
+    const delivery = await deliverOnboardingInvitation(issued);
+    res.status(201).json(success({
+      invitationId: issued.invitationId, membershipId: issued.membershipId,
+      workspaceId: issued.workspaceId, expiresAt: issued.expiresAt, deliveryStatus: delivery.status,
+    }, getRequestId(res)));
   } catch (error) {
     if (!writeLifecycleError(error, res)) throw error;
   }

@@ -50,6 +50,10 @@ import {
   type BackendReport,
   type CreateReportRequestInput,
   type CreateReportRequestResult,
+  type IntakeQueueInput,
+  type IntakeQueueResult,
+  type IntakeRequestDetail,
+  type IntakeOperatorAction,
 } from './real-api-client';
 
 /**
@@ -107,6 +111,21 @@ async function clientFetch<T>(path: string): Promise<T> {
 async function clientPost<T>(path: string, body: unknown): Promise<T> {
   const headers = await resolveClientAuthHeaders();
   return realPost<T>(path, headers, body);
+}
+
+export async function realQueryIntakeRequests(input: IntakeQueueInput): Promise<IntakeQueueResult> {
+  return clientPost('/api/operations/intake-requests/query', input);
+}
+
+export async function realGetIntakeRequestDetail(requestId: string): Promise<{ request: IntakeRequestDetail }> {
+  return clientFetch(`/api/operations/intake-requests/${encodeURIComponent(requestId)}`);
+}
+
+export async function realRunIntakeAction(
+  requestId: string,
+  action: IntakeOperatorAction
+): Promise<{ status: string }> {
+  return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/actions`, { action });
 }
 
 // ---------------------------------------------------------------------------

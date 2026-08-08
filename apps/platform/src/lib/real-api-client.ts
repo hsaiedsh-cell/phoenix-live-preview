@@ -185,6 +185,56 @@ export class RealApiAuthRequiredError extends Error {
   }
 }
 
+export type IntakeRequestStatus =
+  | 'received' | 'under_review' | 'upload_invited' | 'files_received'
+  | 'quoted' | 'accepted' | 'rejected' | 'closed';
+export type IntakeRequestType = 'assessment' | 'demo' | 'general';
+export type IntakeOperatorAction = 'under_review' | 'reject' | 'quote' | 'accept' | 'close';
+
+export interface IntakeQueueItem {
+  requestId: string;
+  publicReference: string;
+  status: IntakeRequestStatus;
+  requestType: IntakeRequestType;
+  company: string;
+  createdAt: string;
+  updatedAt: string;
+  fileCount: number;
+  uploadSessionStatus: 'active' | 'used' | 'revoked' | 'expired' | null;
+}
+
+export interface IntakeQueueResult {
+  items: IntakeQueueItem[];
+  total: number;
+  nextCursor: string | null;
+}
+
+export interface IntakeQueueInput {
+  search?: string;
+  statuses?: IntakeRequestStatus[];
+  requestTypes?: IntakeRequestType[];
+  limit?: number;
+  cursor?: string;
+}
+
+export interface IntakeRequestDetail extends IntakeQueueItem {
+  firstName: string;
+  lastName: string;
+  workEmail: string;
+  role: string;
+  phone: string | null;
+  country: string | null;
+  estimatedTimeline: string | null;
+  message: string;
+  operatorActions: Array<{
+    eventId: string;
+    actorUserId: string;
+    from: IntakeRequestStatus;
+    to: IntakeRequestStatus;
+    createdAt: string;
+  }>;
+}
+
 // ---------------------------------------------------------------------------
 // GET-only fetch helper shared by real-dev and production-auth.
 //

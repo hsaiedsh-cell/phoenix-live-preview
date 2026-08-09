@@ -20,6 +20,14 @@ const clientAuth = readFileSync(resolve(root, 'src/lib/auth/platform-auth.client
 check(client.includes("clientPost('/api/operations/intake-requests/query', input)"), 'queue uses the protected Backend POST route');
 check(client.includes('/api/operations/intake-requests/${encodeURIComponent(requestId)}'), 'detail uses an encoded fixed Backend path');
 check(client.includes('/actions`, { action }'), 'action body contains only the action property');
+check(client.includes("clientPost('/api/operations/intake-workspace-handoffs', input)"), 'provisioning uses the protected fixed Backend route');
+check(component.includes("selected.status === 'accepted'"), 'provisioning control is limited to accepted requests');
+check(component.includes("sourceStatus: 'accepted'"), 'provisioning sends the backend-required accepted source status');
+check(
+  !component.includes('organizationId:') && !component.includes('workspaceId:') &&
+    !component.includes('primaryUserId:') && !component.includes('membershipId:'),
+  'browser cannot choose provisioned resource identifiers'
+);
 check(!component.includes('actorUserId') && !component.includes('platformRole'), 'browser UI cannot supply actor or platform-role claims');
 check(!component.includes('INTAKE_SERVICE_SECRET') && !client.includes('INTAKE_SERVICE_SECRET'), 'Platform contains no Website service credential');
 check(component.includes('window.confirm'), 'actions require explicit operator confirmation');

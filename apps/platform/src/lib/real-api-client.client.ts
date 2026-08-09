@@ -55,6 +55,8 @@ import {
   type IntakeQueueResult,
   type IntakeRequestDetail,
   type IntakeOperatorAction,
+  type IntakeProvisioningInput,
+  type IntakeProvisioningResult,
 } from './real-api-client';
 
 /**
@@ -144,6 +146,12 @@ export async function realRunIntakeAction(
   action: IntakeOperatorAction
 ): Promise<{ status: string }> {
   return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/actions`, { action });
+}
+
+export async function realProvisionIntakeWorkspace(
+  input: IntakeProvisioningInput
+): Promise<IntakeProvisioningResult> {
+  return clientPost('/api/operations/intake-workspace-handoffs', input);
 }
 
 // ---------------------------------------------------------------------------

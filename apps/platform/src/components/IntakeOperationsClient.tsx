@@ -3,11 +3,13 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   realGetIntakeRequestDetail,
+  realProvisionIntakeWorkspace,
   realQueryIntakeRequests,
   realRunIntakeAction,
 } from '@/lib/real-api-client.client';
 import type {
   IntakeOperatorAction,
+  IntakeProvisioningResult,
   IntakeQueueItem,
   IntakeRequestDetail,
   IntakeRequestStatus,
@@ -41,6 +43,8 @@ export function IntakeOperationsClient() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [provisioningLoading, setProvisioningLoading] = useState(false);
+  const [provisioningResult, setProvisioningResult] = useState<IntakeProvisioningResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadQueue = useCallback(async () => {
@@ -72,10 +76,35 @@ export function IntakeOperationsClient() {
     try {
       const result = await realGetIntakeRequestDetail(requestId);
       setSelected(result.request);
+      setProvisioningResult(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function provisionWorkspace(): Promise<void> {
+    if (!selected || selected.status !== 'accepted') return;
+    if (!window.confirm(`Provision a workspace for ${selected.publicReference}?`)) return;
+    setProvisioningLoading(true);
+    setProvisioningResult(null);
+    setError(null);
+    try {
+      const result = await realProvisionIntakeWorkspace({
+        sourceReference: selected.publicReference,
+        sourceStatus: 'accepted',
+        requestType: selected.requestType,
+        company: selected.company,
+        firstName: selected.firstName,
+        lastName: selected.lastName,
+        workEmail: selected.workEmail,
+      });
+      setProvisioningResult(result);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setProvisioningLoading(false);
     }
   }
 
@@ -160,7 +189,20 @@ export function IntakeOperationsClient() {
             <div className="flex flex-wrap gap-2">{ACTIONS.map((action) => (
               <button key={action.value} disabled={actionLoading} onClick={() => void runAction(action.value)}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-phx-navy hover:bg-gray-50 disabled:opacity-50">{action.label}</button>
-            ))}</div>
+            ))}
+              {selected.status === 'accepted' && (
+                <button disabled={provisioningLoading || actionLoading} onClick={() => void provisionWorkspace()}
+                  className="rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy hover:opacity-90 disabled:opacity-50">
+                  {provisioningLoading ? 'Provisioning…' : 'Provision workspace'}
+                </button>
+              )}
+            </div>
+            {provisioningResult && (
+              <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                Workspace {provisioningResult.outcome === 'created' ? 'created' : 'already provisioned'} successfully.
+                <span className="mt-1 block font-mono text-xs">Workspace: {provisioningResult.workspaceId}</span>
+              </div>
+            )}
             <div><h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Action history</h3>
               <div className="mt-2 space-y-2">{selected.operatorActions.length === 0 ? <p className="text-sm text-gray-500">No operator actions yet.</p> : selected.operatorActions.map((entry) => (
                 <div key={entry.eventId} className="rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-600">{entry.from} → {entry.to}<span className="block text-gray-400">{new Date(entry.createdAt).toLocaleString()}</span></div>

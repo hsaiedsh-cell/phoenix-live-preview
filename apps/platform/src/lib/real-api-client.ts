@@ -235,6 +235,26 @@ export interface IntakeRequestDetail extends IntakeQueueItem {
   }>;
 }
 
+export interface IntakeProvisioningInput {
+  sourceReference: string;
+  sourceStatus: 'accepted';
+  requestType: IntakeRequestType;
+  company: string;
+  firstName: string;
+  lastName: string;
+  workEmail: string;
+}
+
+export interface IntakeProvisioningResult {
+  outcome: 'created' | 'replayed';
+  handoffId: string;
+  organizationId: string;
+  workspaceId: string;
+  primaryUserId: string;
+  membershipId: string;
+  assessmentId: null;
+}
+
 // ---------------------------------------------------------------------------
 // GET-only fetch helper shared by real-dev and production-auth.
 //

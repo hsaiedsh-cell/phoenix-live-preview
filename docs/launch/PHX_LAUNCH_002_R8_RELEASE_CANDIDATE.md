@@ -244,3 +244,61 @@ Beta remains **No-Go**. The still-open evidence is now:
    readiness and critical row-count checks; and
 2. a recorded operator walkthrough plus a named release owner's separate
    Go/No-Go decision.
+
+### Provider-managed backup limitation — 2026-08-09
+
+The Supabase dashboard confirmed that `phoenix-free-live-preview` is on the Free
+Plan and has no provider-managed backups. Supabase's isolated
+`Restore to new project` workflow requires a Pro Plan with physical backups;
+the displayed Pro price starts at USD 25 per month, before any applicable
+project-compute charges.
+
+The environment owner elected to continue on the Free Plan without upgrading.
+No subscription, billing, Production configuration, database, or project was
+changed. A manual export/restore is not claimed as equivalent evidence because
+R8 explicitly requires a provider-managed backup restored into an isolated
+environment.
+
+This gate therefore remains unmet and the Hosted Private Beta decision remains
+**No-Go**. The remaining release-governance action is to record the operator
+walkthrough and name the release owner who accepts this No-Go decision. A future
+Go decision still requires upgrading or moving to a provider configuration that
+supports managed backups, waiting for a real backup, and completing the isolated
+restore drill defined in the operations runbook.
+
+### Operator walkthrough and release-owner decision — 2026-08-09
+
+The hosted Preview walkthrough recorded the following operator and containment
+paths without changing Production configuration or opening public registration:
+
+- authenticated, role-gated access to the intake request queue;
+- request lifecycle handling from `received` through provisioning;
+- invitation delivery, acceptance, expiry, revocation, and reissue without raw
+  token exposure;
+- idempotent provisioning and duplicate-operation containment;
+- authorized workspace access and explicit cross-workspace denial;
+- investigation of a sanitized hosted failure by request ID in Sentry; and
+- cleanup of temporary credentials, test-only branch configuration, and local
+  secret files.
+
+The incident-response walkthrough applies the runbook sequence: contain the
+affected invitation or operator identity, preserve audit evidence, assess the
+bounded workspace/action/time window, revoke and reissue exposed invitations,
+rotate affected provider credentials, and reverify unauthorized,
+cross-workspace, and intended authorized access before resuming operations.
+
+**Release owner:** Hossam Said — Phoenix Release Owner
+
+**Hosted Private Beta decision:** **No-Go**
+
+**Public Production decision:** **No-Go; outside this release scope**
+
+The named release owner accepts the current No-Go because the Free Plan has no
+provider-managed backup and the required isolated restore drill has not been
+performed. Reconsideration requires recorded evidence of a real managed backup,
+an isolated restore, migration-level and critical row-count checks, application
+readiness, and destruction or approved retention of the disposable destination.
+
+This completes the operator-walkthrough and named-owner governance record. R8
+remains incomplete only on the provider-managed backup/restore gate; no Hosted
+Private Beta Go authorization is granted.

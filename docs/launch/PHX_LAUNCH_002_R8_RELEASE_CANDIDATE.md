@@ -302,3 +302,42 @@ readiness, and destruction or approved retention of the disposable destination.
 This completes the operator-walkthrough and named-owner governance record. R8
 remains incomplete only on the provider-managed backup/restore gate; no Hosted
 Private Beta Go authorization is granted.
+
+### First provider-managed restore drill — 2026-08-09
+
+After the organization was upgraded to Supabase Pro, the dashboard exposed a
+completed physical backup with source timestamp `2026-08-08 22:26:54 UTC`.
+Supabase restored that provider-managed backup into the isolated Tokyo-region
+project `phoenix-r8-restore-drill-20260809` (project reference
+`qujxhhrqgdrfcsndrgaq`). The confirmation screen reported zero additional
+monthly compute and disk cost for the restored Nano project. A generated
+database password that appeared in automation output was rejected before use
+and rotated; only the replacement credential was submitted to create the
+project.
+
+The provider restore completed and the destination returned online. Read-only
+SQL checks found the following restored baseline row counts:
+
+- organizations: 1;
+- workspaces: 1;
+- workspace users: 6;
+- audit records: 1;
+- auth identities: 1; and
+- assessments: 4.
+
+The restore mechanism therefore worked, but the available backup predates the
+current PHX-LAUNCH-002 schema and data. The restored destination had no Website
+migration table, public intake tables, intake workspace handoffs, onboarding
+invitations, or onboarding invitation deliveries. By comparison, the active
+source contained two Website migrations, two public intake requests, three
+organizations, three workspaces, eight workspace users, four onboarding
+invitations, ten audit records, and four assessments at verification time.
+
+Application readiness for the current release consequently failed at the
+migration/schema gate; this drill is **not** accepted as recovery evidence and
+does not change the No-Go decision. The isolated destination was permanently
+deleted after verification, leaving the active source project unchanged.
+
+The next drill must use a provider-managed backup created after the current
+schema and data were present, then repeat migration-level, critical row-count,
+and application-readiness checks before a new release-owner decision.

@@ -180,3 +180,33 @@ Hosted Private Beta remains **No-Go**. The still-open evidence is now:
    readiness and critical row-count checks; and
 4. a recorded operator walkthrough plus a named release owner's separate
    Go/No-Go decision.
+
+### Hosted cross-workspace denial follow-up — 2026-08-09
+
+A temporary Clerk development-instance secret key was created solely to mint a
+short-lived `phoenix-backend` JWT for the already-authenticated Preview user.
+The key was held in a mode-`0600` temporary file, the file was removed
+automatically after the request pair, and the Clerk key itself was deleted
+immediately after verification. No key or JWT was printed or committed, and no
+Production configuration was changed.
+
+The same JWT produced the following hosted Backend results:
+
+- `GET /api/workspaces/00000003-1111-4111-8111-000000000001/assessments`
+  returned `200` with the four assessments belonging to the user's Active
+  `Acme Enterprise Workspace` membership; and
+- `GET /api/workspaces/b33e42aa-cff6-4a19-8207-d93bc827b915/assessments`
+  returned `403 FORBIDDEN` for the separate onboarding-delivery workspace.
+
+This closes the explicit authenticated cross-workspace denial evidence item.
+The Backend derived authorization from the verified Clerk identity and its
+database-owned membership; changing only the workspace path did not widen
+access.
+
+Hosted Private Beta remains **No-Go**. The still-open evidence is now:
+
+1. privacy-safe monitoring ingestion keyed only by request IDs;
+2. a provider-managed backup restored into an isolated environment with
+   readiness and critical row-count checks; and
+3. a recorded operator walkthrough plus a named release owner's separate
+   Go/No-Go decision.

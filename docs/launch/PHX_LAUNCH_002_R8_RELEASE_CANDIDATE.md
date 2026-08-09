@@ -210,3 +210,37 @@ Hosted Private Beta remains **No-Go**. The still-open evidence is now:
    readiness and critical row-count checks; and
 3. a recorded operator walkthrough plus a named release owner's separate
    Go/No-Go decision.
+
+### Privacy-safe monitoring follow-up — 2026-08-09
+
+The hosted Website Preview branch was connected to the dedicated Sentry project
+`phoenix-website-preview` using a sensitive `SENTRY_DSN` override scoped only to
+`phx-launch-002`. Production configuration was not changed. The Website Preview
+was rebuilt after the configuration change.
+
+A temporary branch-only operations credential was used to exercise the hosted
+error path without creating or modifying an intake row. The test supplied an
+invalid non-record identifier to the internal finalize route, which produced the
+expected generic `500` response and request ID
+`5a6d15fd-11c4-4523-a641-f539482c0539`. Sentry received the grouped
+`SanitizedInternalError` event in environment `vercel-preview` with the same
+request ID and only the expected privacy-safe custom tags:
+
+- `errorCategory=intake_persistence`;
+- `safeErrorCode=DatabaseError`; and
+- the sanitized route template.
+
+The Sentry event did not contain the request body, customer identity, database
+message, credential, or raw intake identifier. The temporary operations
+credential was then removed from the branch, all local secret files were
+deleted, and the Website Preview was rebuilt again with the inherited operations
+configuration. Both temporary read-only Sentry personal tokens were revoked.
+The branch-specific `SENTRY_DSN` remains configured.
+
+This closes the privacy-safe monitoring-ingestion evidence item. Hosted Private
+Beta remains **No-Go**. The still-open evidence is now:
+
+1. a provider-managed backup restored into an isolated environment with
+   readiness and critical row-count checks; and
+2. a recorded operator walkthrough plus a named release owner's separate
+   Go/No-Go decision.

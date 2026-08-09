@@ -352,14 +352,18 @@ their default privileges on future tables, and fixing the two trigger
 functions' mutable `search_path` settings. The `citext` extension remains in
 `public`; moving it is tracked as a separate compatibility change.
 
-The hosted Preview schema predates two report-worker tables, so the migration
-secures every listed table that exists and relies on the default-privilege
-revocation for tables created later. Hosted verification returned 25 existing
-Backend tables, 25 with RLS enabled, zero grants for `anon` or `authenticated`,
-and both trigger functions with the fixed search path. Backend `/health` and
-`/api/readiness` both returned HTTP 200 after the change, and the Website
-contact page continued to render its intake form. The Platform preview remains
-behind Vercel deployment protection for anonymous HTTP checks.
+The initial hosted Preview schema predated the two report-worker tables from
+migrations `0005_report_generation_jobs.sql` and
+`0006_report_artifacts.sql`. Both additive migrations were subsequently applied
+inside one transaction, with RLS enabled and all `anon` and `authenticated`
+table privileges revoked before commit. Final hosted verification returned 27
+expected Backend tables, all 27 with RLS enabled, no missing tables, zero
+PostgREST grants on the new tables, and all six expected report-job/artifact
+indexes. Both new tables were empty at creation, so no data backfill was
+required. Backend `/health` and `/api/readiness` returned HTTP 200 after the
+change, and the Website contact page continued to render its intake form. The
+Platform preview remains behind Vercel deployment protection for anonymous HTTP
+checks.
 
 This hardening closes the direct PostgREST exposure but does not change the R8
 No-Go decision: an accepted provider-managed restore drill from a current

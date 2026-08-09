@@ -117,3 +117,35 @@ Hosted Private Beta therefore remains **No-Go**. The still-open evidence is:
    readiness and critical row-count checks; and
 5. a recorded operator walkthrough plus a named release owner's separate
    Go/No-Go decision.
+
+### Invitation-provider delivery and acceptance follow-up — 2026-08-09
+
+A dedicated Resend sending credential, restricted to the verified
+`send.phoenixops.ai` domain, was configured on the hosted Backend for the
+`phx-launch-002` Preview branch only. Production configuration was not changed.
+
+Fresh hosted browser evidence for request `PHX-REQ-FRR7UV7S7U8Y` confirms:
+
+- the operator recorded the `received -> under_review -> quoted -> accepted`
+  lifecycle and provisioned workspace `b33e42aa-cff6-4a19-8207-d93bc827b915`;
+- the Backend issued an onboarding invitation and recorded its provider
+  delivery as `Sent` without returning or rendering the raw token;
+- the message arrived in the authorized recipient mailbox and its invitation
+  link opened the hosted Preview acceptance route; and
+- the acceptance route displayed `Invitation accepted`, activated the bound
+  workspace membership, and removed the consumed invitation controls from the
+  refreshed operator detail.
+
+This closes the successful provider-delivery and hosted-acceptance portions of
+evidence item 4. The expiry case remains open; no expiry was simulated by
+editing provider or database state.
+
+Hosted Private Beta remains **No-Go**. The still-open evidence is now:
+
+1. an explicit authenticated cross-workspace denial check;
+2. an observed hosted invitation-expiry case without token exposure;
+3. privacy-safe monitoring ingestion keyed only by request IDs;
+4. a provider-managed backup restored into an isolated environment with
+   readiness and critical row-count checks; and
+5. a recorded operator walkthrough plus a named release owner's separate
+   Go/No-Go decision.

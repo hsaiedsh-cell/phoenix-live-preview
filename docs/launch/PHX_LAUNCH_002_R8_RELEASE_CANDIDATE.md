@@ -149,3 +149,34 @@ Hosted Private Beta remains **No-Go**. The still-open evidence is now:
    readiness and critical row-count checks; and
 5. a recorded operator walkthrough plus a named release owner's separate
    Go/No-Go decision.
+
+### Hosted invitation-expiry follow-up — 2026-08-09
+
+An isolated expired invitation row was created in the Supabase Preview database
+for the already-active delivery-validation membership. Its timestamps were set
+in the past at insert time, preserving the database rule that expiry must be
+later than creation. No Production data was changed and the raw token was not
+printed, stored in the database, or exposed in browser output.
+
+Fresh hosted acceptance evidence confirms:
+
+- the acceptance page removed the token fragment from the browser URL before
+  completing validation;
+- the hosted Backend rejected the expired invitation and the Platform rendered
+  the privacy-safe `Invitation unavailable` response rather than provider,
+  token, or database detail;
+- the invitation transitioned atomically from `Issued` to `Expired`; and
+- the already-active workspace membership remained `Active`.
+
+This closes the hosted expiry portion of evidence item 4. Provider delivery,
+acceptance, expiry, revocation, and reissue have now all been observed in the
+isolated Preview environment without raw-token exposure.
+
+Hosted Private Beta remains **No-Go**. The still-open evidence is now:
+
+1. an explicit authenticated cross-workspace denial check;
+2. privacy-safe monitoring ingestion keyed only by request IDs;
+3. a provider-managed backup restored into an isolated environment with
+   readiness and critical row-count checks; and
+4. a recorded operator walkthrough plus a named release owner's separate
+   Go/No-Go decision.

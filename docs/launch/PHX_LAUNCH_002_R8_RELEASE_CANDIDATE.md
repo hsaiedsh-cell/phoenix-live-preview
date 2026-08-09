@@ -10,13 +10,13 @@ adds the operational, incident, and recovery gate.
 ## Decision
 
 - Local implementation candidate: **Ready**.
-- Hosted Private Beta: **No-Go pending the release owner's final decision**.
+- Hosted Private Beta: **Go — invite-only controlled rollout**.
 - Public Production: **No-Go; outside scope**.
 
-All required Hosted Private Beta evidence has now been recorded, including the
-accepted provider-managed restore drill below. Registration remains closed and
-access remains invite-only until the named release owner records the separate
-final Go/No-Go authorization.
+All required Hosted Private Beta evidence has been recorded, including the
+accepted provider-managed restore drill below. The named release owner has
+authorized the invite-only controlled rollout. Public registration remains
+closed.
 
 ## Evidence Required to Change Hosted Status
 
@@ -401,6 +401,25 @@ approval. The active Preview project `zbxamdetakiopappmuwd` was not modified by
 the drill.
 
 This drill is accepted as recovery evidence and closes the final external R8
-gate. Hosted Private Beta remains No-Go only until the named release owner
-records the separate final Go/No-Go decision. Public Production remains outside
-this release scope and stays No-Go.
+gate. The named release owner's separate final decision is recorded below.
+Public Production remains outside this release scope and stays No-Go.
+
+### Final release-owner authorization — 2026-08-09
+
+**Release owner:** Hossam Said — Phoenix Release Owner
+
+**Hosted Private Beta decision:** **Go — invite-only controlled rollout**
+
+**Public Production decision:** **No-Go; outside this release scope**
+
+The release owner approved the Hosted Private Beta Go after reviewing the
+completed R8 evidence set, successful current-backup restore drill, database
+readiness, privacy-safe monitoring, provider invitation lifecycle, and
+cross-workspace denial evidence. The authorization does not open public
+registration, approve public Production, or widen the configured Preview
+environment boundary.
+
+Initial customer access must remain invitation-only and bounded. Operators must
+continue monitoring readiness, sanitized request-ID errors, authentication and
+invitation failures, and daily backup availability under the R8 operations
+runbook.

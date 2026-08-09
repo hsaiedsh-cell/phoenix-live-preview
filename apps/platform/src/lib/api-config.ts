@@ -122,10 +122,43 @@ export interface PhoenixApiConfig {
 const DEFAULT_TIMEOUT_MS = 15000;
 const DEFAULT_MOCK_LATENCY_MS = 0;
 
-/** Reads a NEXT_PUBLIC_* env var safely, returning undefined rather than throwing if process.env is unavailable. */
-function readEnv(name: string): string | undefined {
+type PublicEnvName =
+  | 'NEXT_PUBLIC_PHOENIX_API_MODE'
+  | 'NEXT_PUBLIC_PHOENIX_BACKEND_URL'
+  | 'NEXT_PUBLIC_PHOENIX_API_BASE_URL'
+  | 'NEXT_PUBLIC_PHOENIX_DEV_WORKSPACE_ID'
+  | 'NEXT_PUBLIC_PHOENIX_DEV_USER_ID'
+  | 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY'
+  | 'NEXT_PUBLIC_PHOENIX_PRODUCTION_WORKSPACE_ID'
+  | 'NEXT_PUBLIC_PHOENIX_DEFAULT_REPORT_TEMPLATE_ID';
+
+/**
+ * Reads an approved NEXT_PUBLIC_* variable through static property access.
+ * Next.js replaces these references in browser bundles at build time; dynamic
+ * process.env[name] access works on the server but resolves empty in the client.
+ */
+function readEnv(name: PublicEnvName): string | undefined {
   try {
-    const value = process.env[name];
+    const value = (() => {
+      switch (name) {
+        case 'NEXT_PUBLIC_PHOENIX_API_MODE':
+          return process.env.NEXT_PUBLIC_PHOENIX_API_MODE;
+        case 'NEXT_PUBLIC_PHOENIX_BACKEND_URL':
+          return process.env.NEXT_PUBLIC_PHOENIX_BACKEND_URL;
+        case 'NEXT_PUBLIC_PHOENIX_API_BASE_URL':
+          return process.env.NEXT_PUBLIC_PHOENIX_API_BASE_URL;
+        case 'NEXT_PUBLIC_PHOENIX_DEV_WORKSPACE_ID':
+          return process.env.NEXT_PUBLIC_PHOENIX_DEV_WORKSPACE_ID;
+        case 'NEXT_PUBLIC_PHOENIX_DEV_USER_ID':
+          return process.env.NEXT_PUBLIC_PHOENIX_DEV_USER_ID;
+        case 'NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY':
+          return process.env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY;
+        case 'NEXT_PUBLIC_PHOENIX_PRODUCTION_WORKSPACE_ID':
+          return process.env.NEXT_PUBLIC_PHOENIX_PRODUCTION_WORKSPACE_ID;
+        case 'NEXT_PUBLIC_PHOENIX_DEFAULT_REPORT_TEMPLATE_ID':
+          return process.env.NEXT_PUBLIC_PHOENIX_DEFAULT_REPORT_TEMPLATE_ID;
+      }
+    })();
     return typeof value === 'string' && value.trim().length > 0 ? value.trim() : undefined;
   } catch {
     return undefined;

@@ -44,10 +44,27 @@ export type AuthHeaderResult = { ok: true; token: string } | { ok: false; reason
  */
 interface MinimalClerkWindow {
   Clerk?: {
+    loaded?: boolean;
     session?: {
       getToken: (options?: { template?: string }) => Promise<string | null>;
     } | null;
   };
+}
+
+async function waitForClerkClient(clerkWindow: MinimalClerkWindow): Promise<void> {
+  if (clerkWindow.Clerk?.loaded === true || clerkWindow.Clerk?.session) return;
+
+  await new Promise<void>((resolve) => {
+    const deadline = Date.now() + 5_000;
+    const check = () => {
+      if (clerkWindow.Clerk?.loaded === true || clerkWindow.Clerk?.session || Date.now() >= deadline) {
+        resolve();
+        return;
+      }
+      window.setTimeout(check, 50);
+    };
+    check();
+  });
 }
 
 /**
@@ -72,6 +89,7 @@ export async function getBackendAuthHeaders(): Promise<AuthHeaderResult> {
   }
 
   const clerkWindow = window as unknown as MinimalClerkWindow;
+  await waitForClerkClient(clerkWindow);
   const session = clerkWindow.Clerk?.session;
 
   if (!session) {
@@ -79,7 +97,7 @@ export async function getBackendAuthHeaders(): Promise<AuthHeaderResult> {
   }
 
   try {
-    const token = await session.getToken();
+    const token = await session.getToken({ template: 'phoenix-backend' });
     if (!token) {
       return { ok: false, reason: 'Clerk session present but returned no token.' };
     }

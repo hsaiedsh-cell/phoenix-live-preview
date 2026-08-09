@@ -255,6 +255,19 @@ export interface IntakeProvisioningResult {
   assessmentId: null;
 }
 
+export interface OnboardingInvitationIssueResult {
+  invitationId: string;
+  membershipId: string;
+  workspaceId: string;
+  expiresAt: string;
+  deliveryStatus: 'Sent' | 'Failed';
+}
+
+export interface OnboardingInvitationRevokeResult {
+  invitationId: string;
+  status: 'Revoked';
+}
+
 // ---------------------------------------------------------------------------
 // GET-only fetch helper shared by real-dev and production-auth.
 //

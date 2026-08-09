@@ -3,8 +3,11 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   realGetIntakeRequestDetail,
+  realIssueOnboardingInvitation,
   realProvisionIntakeWorkspace,
   realQueryIntakeRequests,
+  realReissueOnboardingInvitation,
+  realRevokeOnboardingInvitation,
   realRunIntakeAction,
 } from '@/lib/real-api-client.client';
 import type {
@@ -14,6 +17,7 @@ import type {
   IntakeRequestDetail,
   IntakeRequestStatus,
   IntakeRequestType,
+  OnboardingInvitationIssueResult,
 } from '@/lib/real-api-client';
 
 const STATUSES: IntakeRequestStatus[] = [
@@ -45,6 +49,8 @@ export function IntakeOperationsClient() {
   const [actionLoading, setActionLoading] = useState(false);
   const [provisioningLoading, setProvisioningLoading] = useState(false);
   const [provisioningResult, setProvisioningResult] = useState<IntakeProvisioningResult | null>(null);
+  const [invitationLoading, setInvitationLoading] = useState(false);
+  const [invitation, setInvitation] = useState<(OnboardingInvitationIssueResult & { status: 'Issued' | 'Revoked' }) | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   const loadQueue = useCallback(async () => {
@@ -77,10 +83,53 @@ export function IntakeOperationsClient() {
       const result = await realGetIntakeRequestDetail(requestId);
       setSelected(result.request);
       setProvisioningResult(null);
+      setInvitation(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function issueInvitation(): Promise<void> {
+    if (!provisioningResult || !window.confirm('Issue a 72-hour onboarding invitation for this Owner membership?')) return;
+    setInvitationLoading(true);
+    setError(null);
+    try {
+      const result = await realIssueOnboardingInvitation(provisioningResult.membershipId, 72);
+      setInvitation({ ...result, status: 'Issued' });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setInvitationLoading(false);
+    }
+  }
+
+  async function revokeInvitation(): Promise<void> {
+    if (!invitation || invitation.status !== 'Issued' || !window.confirm('Revoke this onboarding invitation?')) return;
+    setInvitationLoading(true);
+    setError(null);
+    try {
+      await realRevokeOnboardingInvitation(invitation.invitationId);
+      setInvitation({ ...invitation, status: 'Revoked' });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setInvitationLoading(false);
+    }
+  }
+
+  async function reissueInvitation(): Promise<void> {
+    if (!invitation || !window.confirm('Reissue this onboarding invitation with a new 72-hour token?')) return;
+    setInvitationLoading(true);
+    setError(null);
+    try {
+      const result = await realReissueOnboardingInvitation(invitation.invitationId, 72);
+      setInvitation({ ...result, status: 'Issued' });
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setInvitationLoading(false);
     }
   }
 
@@ -198,9 +247,29 @@ export function IntakeOperationsClient() {
               )}
             </div>
             {provisioningResult && (
-              <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
-                Workspace {provisioningResult.outcome === 'created' ? 'created' : 'already provisioned'} successfully.
-                <span className="mt-1 block font-mono text-xs">Workspace: {provisioningResult.workspaceId}</span>
+              <div className="space-y-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                <div role="status">Workspace {provisioningResult.outcome === 'created' ? 'created' : 'already provisioned'} successfully.
+                  <span className="mt-1 block font-mono text-xs">Workspace: {provisioningResult.workspaceId}</span>
+                </div>
+                {!invitation ? (
+                  <button disabled={invitationLoading} onClick={() => void issueInvitation()}
+                    className="rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                    {invitationLoading ? 'Issuing…' : 'Issue onboarding invitation'}
+                  </button>
+                ) : (
+                  <div className="space-y-2 border-t border-green-200 pt-3">
+                    <p>Invitation: <strong>{invitation.status}</strong> · Delivery: <strong>{invitation.deliveryStatus}</strong></p>
+                    <p className="text-xs">Expires: {new Date(invitation.expiresAt).toLocaleString()}</p>
+                    <div className="flex flex-wrap gap-2">
+                      {invitation.status === 'Issued' && <button disabled={invitationLoading} onClick={() => void revokeInvitation()}
+                        className="rounded-lg border border-red-300 px-3 py-2 text-xs font-semibold text-red-700 disabled:opacity-50">Revoke invitation</button>}
+                      <button disabled={invitationLoading} onClick={() => void reissueInvitation()}
+                        className="rounded-lg border border-green-300 px-3 py-2 text-xs font-semibold text-green-800 disabled:opacity-50">
+                        {invitationLoading ? 'Working…' : 'Reissue invitation'}
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
             )}
             <div><h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Action history</h3>

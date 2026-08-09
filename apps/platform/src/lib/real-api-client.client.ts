@@ -57,6 +57,8 @@ import {
   type IntakeOperatorAction,
   type IntakeProvisioningInput,
   type IntakeProvisioningResult,
+  type OnboardingInvitationIssueResult,
+  type OnboardingInvitationRevokeResult,
 } from './real-api-client';
 
 /**
@@ -152,6 +154,26 @@ export async function realProvisionIntakeWorkspace(
   input: IntakeProvisioningInput
 ): Promise<IntakeProvisioningResult> {
   return clientPost('/api/operations/intake-workspace-handoffs', input);
+}
+
+export async function realIssueOnboardingInvitation(
+  membershipId: string,
+  expiresInHours = 72
+): Promise<OnboardingInvitationIssueResult> {
+  return clientPost('/api/operations/onboarding-invitations', { membershipId, expiresInHours });
+}
+
+export async function realRevokeOnboardingInvitation(
+  invitationId: string
+): Promise<OnboardingInvitationRevokeResult> {
+  return clientPost(`/api/operations/onboarding-invitations/${encodeURIComponent(invitationId)}/revoke`, {});
+}
+
+export async function realReissueOnboardingInvitation(
+  invitationId: string,
+  expiresInHours = 72
+): Promise<OnboardingInvitationIssueResult> {
+  return clientPost(`/api/operations/onboarding-invitations/${encodeURIComponent(invitationId)}/reissue`, { expiresInHours });
 }
 
 // ---------------------------------------------------------------------------

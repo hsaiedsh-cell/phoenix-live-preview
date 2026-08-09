@@ -23,6 +23,10 @@ check(client.includes('/actions`, { action }'), 'action body contains only the a
 check(client.includes("clientPost('/api/operations/intake-workspace-handoffs', input)"), 'provisioning uses the protected fixed Backend route');
 check(component.includes("selected.status === 'accepted'"), 'provisioning control is limited to accepted requests');
 check(component.includes("sourceStatus: 'accepted'"), 'provisioning sends the backend-required accepted source status');
+check(client.includes("clientPost('/api/operations/onboarding-invitations', { membershipId, expiresInHours })"), 'invitation issuance uses the protected Backend route');
+check(client.includes('/revoke`, {})') && client.includes('/reissue`, { expiresInHours }'), 'revocation and reissue use fixed encoded Backend paths');
+check(component.includes('Issue onboarding invitation') && component.includes('Revoke invitation') && component.includes('Reissue invitation'), 'operator UI exposes the controlled R5 lifecycle');
+check(!component.includes('token:') && !client.includes('token: issued'), 'operator UI never receives or supplies a raw invitation token');
 check(
   !component.includes('organizationId:') && !component.includes('workspaceId:') &&
     !component.includes('primaryUserId:') && !component.includes('membershipId:'),

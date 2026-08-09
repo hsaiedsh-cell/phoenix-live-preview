@@ -341,3 +341,26 @@ deleted after verification, leaving the active source project unchanged.
 The next drill must use a provider-managed backup created after the current
 schema and data were present, then repeat migration-level, critical row-count,
 and application-readiness checks before a new release-owner decision.
+
+### Preview PostgREST hardening — 2026-08-09
+
+The Supabase Security Advisor review found that the Backend-owned public-schema
+tables inherited Data API grants for `anon` and `authenticated` and did not have
+RLS enabled. Migration `0009_postgrest_security_hardening.sql` now fails those
+tables closed by enabling RLS, revoking both roles' table privileges, revoking
+their default privileges on future tables, and fixing the two trigger
+functions' mutable `search_path` settings. The `citext` extension remains in
+`public`; moving it is tracked as a separate compatibility change.
+
+The hosted Preview schema predates two report-worker tables, so the migration
+secures every listed table that exists and relies on the default-privilege
+revocation for tables created later. Hosted verification returned 25 existing
+Backend tables, 25 with RLS enabled, zero grants for `anon` or `authenticated`,
+and both trigger functions with the fixed search path. Backend `/health` and
+`/api/readiness` both returned HTTP 200 after the change, and the Website
+contact page continued to render its intake form. The Platform preview remains
+behind Vercel deployment protection for anonymous HTTP checks.
+
+This hardening closes the direct PostgREST exposure but does not change the R8
+No-Go decision: an accepted provider-managed restore drill from a current
+backup is still required.

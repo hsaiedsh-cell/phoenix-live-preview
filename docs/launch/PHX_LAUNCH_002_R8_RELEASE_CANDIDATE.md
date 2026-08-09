@@ -56,3 +56,23 @@ still required for the R2/R3/R6/R7 end-to-end path.
 Accordingly, the Hosted Private Beta decision remains **No-Go**. This validation
 does not claim successful Supabase reads, hosted Backend OIDC, operator actions,
 invitation-provider delivery, monitoring ingestion, or backup/restore.
+
+### Supabase follow-up — 2026-08-09
+
+The referenced `phoenix-free-live-preview` project was found paused and was
+resumed. Its database credential was then rotated, the Platform
+`PHOENIX_DATABASE_URL` was updated for **Preview only** to the Supabase
+transaction pooler, and the Platform Preview was redeployed. No Production
+environment value was changed.
+
+The fresh hosted deployment passed authenticated live reads for:
+
+- `/dashboard` — four database-backed assessments and derived summary counts;
+- `/assessments` — four database-backed assessment rows; and
+- `/settings` — three activity records and one immutable audit record.
+
+No browser console errors or raw provider/database details were present. This
+closes the Supabase live-read blocker recorded above. Hosted Private Beta remains
+**No-Go** because the hosted `production-auth` Backend/OIDC/operator path,
+invitation-provider delivery, monitoring ingestion, and backup/restore drill are
+still not evidenced.

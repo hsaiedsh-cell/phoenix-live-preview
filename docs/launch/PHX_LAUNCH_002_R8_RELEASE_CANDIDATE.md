@@ -9,14 +9,14 @@ adds the operational, incident, and recovery gate.
 
 ## Decision
 
-- Local implementation candidate: **Ready for hosted validation**.
-- Hosted Private Beta: **No-Go pending external evidence**.
+- Local implementation candidate: **Ready**.
+- Hosted Private Beta: **No-Go pending the release owner's final decision**.
 - Public Production: **No-Go; outside scope**.
 
-The hosted No-Go is not a code-test failure. Current execution lacks fresh Clerk
-credentials and provider access, so it cannot honestly claim the required live
-Clerk browser rerun, invitation-provider delivery, monitoring ingestion, or a
-provider-managed backup/restore drill.
+All required Hosted Private Beta evidence has now been recorded, including the
+accepted provider-managed restore drill below. Registration remains closed and
+access remains invite-only until the named release owner records the separate
+final Go/No-Go authorization.
 
 ## Evidence Required to Change Hosted Status
 
@@ -368,3 +368,39 @@ checks.
 This hardening closes the direct PostgREST exposure but does not change the R8
 No-Go decision: an accepted provider-managed restore drill from a current
 backup is still required.
+
+### Accepted provider-managed restore drill — 2026-08-09
+
+Supabase completed a physical backup with source timestamp
+`2026-08-09 17:44:03 UTC`, after the Preview schema backfill and PostgREST
+hardening. The backup was restored into the isolated Tokyo-region Nano project
+`phoenix-r8-restore-drill-20260809-v2` (project reference
+`wtqnnsgmfgofeolasftu`). Supabase displayed zero additional monthly compute and
+disk cost. A generated database password appeared in automation output, so it
+was treated as exposed and rotated before any database connection was made.
+
+Read-only verification on the restored destination confirmed:
+
+- all 27 expected Backend tables were present and all 27 had RLS enabled;
+- `anon` and `authenticated` had zero Backend table grants;
+- both hardened trigger functions were present with the fixed
+  `pg_catalog, public` search path;
+- organizations: 3; workspaces: 3; workspace users: 8; audit records: 10;
+- auth identities: 1; assessments: 4; public intake requests: 2;
+- intake workspace handoffs: 2; onboarding invitations: 4; invitation
+  deliveries: 3; and Website intake migrations: 2;
+- report generation jobs and report artifacts were both present and empty, as
+  expected for the current Preview source; and
+- the Backend PostgREST-security QA passed 7/7 against the restored database.
+
+A temporary local Backend instance connected to the restored database and its
+`/api/readiness` response reported the database as `connected`. The temporary
+connection file was deleted, the local process was stopped, and the disposable
+Supabase project was permanently deleted after explicit release-owner
+approval. The active Preview project `zbxamdetakiopappmuwd` was not modified by
+the drill.
+
+This drill is accepted as recovery evidence and closes the final external R8
+gate. Hosted Private Beta remains No-Go only until the named release owner
+records the separate final Go/No-Go decision. Public Production remains outside
+this release scope and stays No-Go.

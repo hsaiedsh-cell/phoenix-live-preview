@@ -54,6 +54,16 @@ export interface CreateQuoteOfferInput {
   actorUserId: string;
 }
 
+export interface CustomerPortalRequestRow {
+  request_id: string;
+  public_reference: string;
+  request_type: string;
+  company: string;
+  status: string;
+  created_at: Date;
+  updated_at: Date;
+}
+
 export async function grantCustomerAccess(input: {
   requestId: string;
   customerUserId: string;
@@ -85,6 +95,24 @@ export async function customerCanAccessRequest(requestId: string, customerUserId
     [requestId, customerUserId]
   );
   return rows[0]?.allowed === true;
+}
+
+export async function listCustomerPortalRequests(customerUserId: string): Promise<CustomerPortalRequestRow[]> {
+  return intakeQuery<CustomerPortalRequestRow>(
+    `SELECT
+       r.id AS request_id,
+       r.public_reference,
+       r.request_type,
+       r.company,
+       r.status,
+       r.created_at,
+       r.updated_at
+     FROM public_intake_customer_access a
+     JOIN public_intake_requests r ON r.id = a.request_id
+     WHERE a.customer_user_id = $1 AND a.revoked_at IS NULL
+     ORDER BY r.created_at DESC, r.id DESC`,
+    [customerUserId]
+  );
 }
 
 export async function createQuoteOffer(input: CreateQuoteOfferInput): Promise<QuoteOfferRow> {

@@ -180,3 +180,24 @@ export function buildQuoteEmail(input: {
     idempotencyKey: '',
   };
 }
+
+export function buildPortalMessageEmail(input: {
+  publicReference: string;
+  firstName: string;
+  message: string;
+  portalUrl: string;
+}): SendEmailInput {
+  const safe = {
+    reference: escapeHtml(input.publicReference),
+    firstName: escapeHtml(input.firstName),
+    message: escapeHtml(input.message),
+    portalUrl: escapeHtml(input.portalUrl),
+  };
+  return {
+    to: '',
+    subject: `New Phoenix update for ${input.publicReference}`,
+    text: `Hi ${input.firstName},\n\nPhoenix posted a new update on request ${input.publicReference}:\n\n${input.message}\n\nView and reply in your client portal: ${input.portalUrl}\n\n— The Phoenix team`,
+    html: `<p>Hi ${safe.firstName},</p><p>Phoenix posted a new update on request <strong>${safe.reference}</strong>.</p><blockquote style="border-left:3px solid #16b8d4;margin:16px 0;padding:8px 16px;color:#334155">${safe.message}</blockquote><p><a href="${safe.portalUrl}">View and reply in your client portal</a></p><p>— The Phoenix team</p>`,
+    idempotencyKey: '',
+  };
+}

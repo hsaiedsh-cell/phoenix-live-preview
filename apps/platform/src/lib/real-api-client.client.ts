@@ -174,7 +174,7 @@ export async function realSendOperatorCustomerMessage(
   requestId: string,
   quoteOfferId: string,
   message: string
-): Promise<{ messageId: string; createdAt: string }> {
+): Promise<{ messageId: string; createdAt: string; emailSent?: boolean }> {
   return clientPost(
     `/api/operations/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/messages`,
     { message }

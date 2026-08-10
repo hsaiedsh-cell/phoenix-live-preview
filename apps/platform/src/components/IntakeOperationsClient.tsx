@@ -90,6 +90,7 @@ export function IntakeOperationsClient() {
   const [portalDetail, setPortalDetail] = useState<CustomerPortalRequestDetail | null>(null);
   const [operatorMessage, setOperatorMessage] = useState('');
   const [operatorMessageLoading, setOperatorMessageLoading] = useState(false);
+  const [operatorMessageStatus, setOperatorMessageStatus] = useState<string | null>(null);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -130,6 +131,7 @@ export function IntakeOperationsClient() {
       setDownloadLinks({});
       setQuoteStatus(null);
       setOperatorMessage('');
+      setOperatorMessageStatus(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -170,8 +172,11 @@ export function IntakeOperationsClient() {
     setOperatorMessageLoading(true);
     setError(null);
     try {
-      await realSendOperatorCustomerMessage(selected.requestId, latestOffer.quoteOfferId, message);
+      const result = await realSendOperatorCustomerMessage(selected.requestId, latestOffer.quoteOfferId, message);
       setOperatorMessage('');
+      setOperatorMessageStatus(result.emailSent
+        ? 'Reply saved and customer email notification sent.'
+        : 'Reply saved, but the customer email notification could not be sent.');
       setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));
     } catch (caught) {
       setError(errorMessage(caught));
@@ -420,6 +425,7 @@ export function IntakeOperationsClient() {
                 className="mt-2 rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
                 {operatorMessageLoading ? 'Sending…' : 'Send reply'}
               </button>
+              {operatorMessageStatus && <p role="status" className="mt-2 text-xs text-gray-600">{operatorMessageStatus}</p>}
             </div>}
             <div className="flex flex-wrap gap-2">{ACTIONS.filter((action) => ALLOWED_ACTIONS[selected.status].includes(action.value)).map((action) => (
               <button key={action.value} disabled={actionLoading} onClick={() => void runAction(action.value)}

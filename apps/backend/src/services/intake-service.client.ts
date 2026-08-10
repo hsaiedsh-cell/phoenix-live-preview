@@ -213,7 +213,8 @@ const websiteCustomerDecisionResponseSchema = z.object({
 }).strict();
 
 const websiteCustomerMessageResponseSchema = z.object({
-  messageId: z.string().uuid(), createdAt: z.string().datetime({ offset: true }), requestId: serviceRequestIdSchema,
+  messageId: z.string().uuid(), createdAt: z.string().datetime({ offset: true }),
+  emailSent: z.boolean().optional(), requestId: serviceRequestIdSchema,
 }).strict();
 
 const websiteCustomerAccessResponseSchema = z.object({
@@ -808,7 +809,7 @@ export function createIntakeServiceClient(
         successSchema: websiteCustomerMessageResponseSchema, allowedUpstreamStatuses: [404, 409],
       });
       if (!result.ok) return result;
-      return { ok: true, data: { messageId: result.data.messageId, createdAt: result.data.createdAt } };
+      return { ok: true, data: { messageId: result.data.messageId, createdAt: result.data.createdAt, emailSent: result.data.emailSent } };
     },
 
     async operatorPortalDetail(intakeRequestId, requestId) {
@@ -835,7 +836,11 @@ export function createIntakeServiceClient(
         successSchema: websiteCustomerMessageResponseSchema, allowedUpstreamStatuses: [404, 409],
       });
       if (!result.ok) return result;
-      return { ok: true, data: { messageId: result.data.messageId, createdAt: result.data.createdAt } };
+      return { ok: true, data: {
+        messageId: result.data.messageId,
+        createdAt: result.data.createdAt,
+        emailSent: result.data.emailSent,
+      } };
     },
 
     async grantCustomerAccess(intakeRequestId, customerUserId, actorUserId, requestId) {

@@ -29,6 +29,7 @@ function optionalServerEnv(name: string): string | undefined {
 
 export const publicConfig = {
   siteUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://phoenixops.ai',
+  platformUrl: process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://phoenix-live-preview-platform-git-phx-launch-002-phoenixai.vercel.app',
   contactEmail: process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'hello@phoenixops.ai',
   turnstileSiteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '',
 } as const;

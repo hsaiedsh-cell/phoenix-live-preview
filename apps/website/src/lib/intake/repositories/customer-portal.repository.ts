@@ -4,6 +4,14 @@ export type QuoteCurrency = 'USD' | 'AED';
 export type QuoteFileFormat = 'AI' | 'SVG' | 'JPEG' | 'PNG' | 'PDF' | 'EPS';
 export type QuoteDecision = 'approved' | 'declined' | 'changes_requested';
 export type QuoteMessageAuthor = 'customer' | 'operator';
+export type FulfillmentStatus =
+  | 'accepted'
+  | 'in_progress'
+  | 'preview_ready'
+  | 'payment_pending'
+  | 'paid'
+  | 'final_files_delivered'
+  | 'cancelled';
 
 export interface QuoteOfferRow {
   id: string;
@@ -40,6 +48,32 @@ export interface QuoteMessageRow {
   author_type: QuoteMessageAuthor;
   author_user_id: string;
   message: string;
+  created_at: Date;
+}
+
+export interface FulfillmentRow {
+  request_id: string;
+  quote_offer_id: string;
+  status: FulfillmentStatus;
+  approved_at: Date;
+  started_at: Date | null;
+  due_at: Date;
+  preview_ready_at: Date | null;
+  payment_pending_at: Date | null;
+  paid_at: Date | null;
+  final_files_delivered_at: Date | null;
+  updated_by_actor_user_id: string | null;
+  created_at: Date;
+  updated_at: Date;
+}
+
+export interface FulfillmentEventRow {
+  id: string;
+  request_id: string;
+  quote_offer_id: string;
+  from_status: FulfillmentStatus | null;
+  to_status: FulfillmentStatus;
+  actor_user_id: string | null;
   created_at: Date;
 }
 
@@ -213,7 +247,7 @@ export async function recordCustomerDecision(input: {
   termsAcceptedVersion?: string;
 }): Promise<QuoteDecisionRow> {
   return withIntakeTransaction(async (query) => {
-    await lockAuthorizedLatestOffer(
+    const offer = await lockAuthorizedLatestOffer(
       query,
       input.requestId,
       input.quoteOfferId,
@@ -242,7 +276,104 @@ export async function recordCustomerDecision(input: {
         input.termsAcceptedVersion ?? null,
       ]
     );
+    if (input.decision === 'approved') {
+      const fulfillment = await query<FulfillmentRow>(
+        `INSERT INTO public_intake_fulfillments (
+           request_id, quote_offer_id, status, approved_at, due_at
+         ) VALUES ($1,$2,'accepted',$3,$3 + make_interval(hours => $4))
+         ON CONFLICT (request_id) DO UPDATE SET
+           quote_offer_id = EXCLUDED.quote_offer_id,
+           status = 'accepted',
+           approved_at = EXCLUDED.approved_at,
+           started_at = NULL,
+           due_at = EXCLUDED.due_at,
+           preview_ready_at = NULL,
+           payment_pending_at = NULL,
+           paid_at = NULL,
+           final_files_delivered_at = NULL,
+           updated_by_actor_user_id = NULL,
+           updated_at = now()
+         RETURNING *`,
+        [input.requestId, input.quoteOfferId, rows[0].created_at, offer.delivery_hours]
+      );
+      await query(
+        `INSERT INTO public_intake_fulfillment_events (
+           request_id, quote_offer_id, from_status, to_status, actor_user_id
+         ) VALUES ($1,$2,NULL,'accepted',$3)`,
+        [input.requestId, input.quoteOfferId, input.customerUserId]
+      );
+      if (!fulfillment[0]) throw new Error('portal_fulfillment_create_failed');
+    }
     return rows[0];
+  });
+}
+
+export async function getFulfillment(requestId: string): Promise<FulfillmentRow | null> {
+  const rows = await intakeQuery<FulfillmentRow>(
+    `SELECT * FROM public_intake_fulfillments WHERE request_id = $1`,
+    [requestId]
+  );
+  return rows[0] ?? null;
+}
+
+export async function listFulfillmentEvents(requestId: string): Promise<FulfillmentEventRow[]> {
+  return intakeQuery<FulfillmentEventRow>(
+    `SELECT * FROM public_intake_fulfillment_events
+     WHERE request_id = $1 ORDER BY created_at ASC, id ASC`,
+    [requestId]
+  );
+}
+
+const FULFILLMENT_TRANSITIONS: Record<FulfillmentStatus, FulfillmentStatus[]> = {
+  accepted: ['in_progress', 'cancelled'],
+  in_progress: ['preview_ready', 'cancelled'],
+  preview_ready: ['in_progress', 'payment_pending', 'cancelled'],
+  payment_pending: ['preview_ready', 'paid', 'cancelled'],
+  paid: ['final_files_delivered'],
+  final_files_delivered: [],
+  cancelled: [],
+};
+
+export async function transitionFulfillment(input: {
+  requestId: string;
+  toStatus: FulfillmentStatus;
+  actorUserId: string;
+}): Promise<FulfillmentRow> {
+  return withIntakeTransaction(async (query) => {
+    const rows = await query<FulfillmentRow>(
+      `SELECT * FROM public_intake_fulfillments WHERE request_id = $1 FOR UPDATE`,
+      [input.requestId]
+    );
+    const current = rows[0];
+    if (!current) throw new Error('portal_fulfillment_not_found');
+    if (!FULFILLMENT_TRANSITIONS[current.status].includes(input.toStatus)) {
+      throw new Error('portal_fulfillment_invalid_transition');
+    }
+    const timestampColumn: Partial<Record<FulfillmentStatus, string>> = {
+      in_progress: 'started_at',
+      preview_ready: 'preview_ready_at',
+      payment_pending: 'payment_pending_at',
+      paid: 'paid_at',
+      final_files_delivered: 'final_files_delivered_at',
+    };
+    const column = timestampColumn[input.toStatus];
+    const updated = await query<FulfillmentRow>(
+      `UPDATE public_intake_fulfillments SET
+         status = $2,
+         updated_by_actor_user_id = $3,
+         updated_at = now()
+         ${column ? `, ${column} = COALESCE(${column}, now())` : ''}
+       WHERE request_id = $1
+       RETURNING *`,
+      [input.requestId, input.toStatus, input.actorUserId]
+    );
+    await query(
+      `INSERT INTO public_intake_fulfillment_events (
+         request_id, quote_offer_id, from_status, to_status, actor_user_id
+       ) VALUES ($1,$2,$3,$4,$5)`,
+      [input.requestId, current.quote_offer_id, current.status, input.toStatus, input.actorUserId]
+    );
+    return updated[0];
   });
 }
 

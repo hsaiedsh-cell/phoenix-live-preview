@@ -195,6 +195,31 @@ const customerQuoteMessageSchema = z.object({
   createdAt: z.string().datetime({ offset: true }),
 }).strict();
 
+const fulfillmentStatusSchema = z.enum([
+  'accepted', 'in_progress', 'preview_ready', 'payment_pending',
+  'paid', 'final_files_delivered', 'cancelled',
+]);
+
+const fulfillmentSchema = z.object({
+  quoteOfferId: z.string().uuid(),
+  status: fulfillmentStatusSchema,
+  approvedAt: z.string().datetime({ offset: true }),
+  startedAt: z.string().datetime({ offset: true }).nullable(),
+  dueAt: z.string().datetime({ offset: true }),
+  previewReadyAt: z.string().datetime({ offset: true }).nullable(),
+  paymentPendingAt: z.string().datetime({ offset: true }).nullable(),
+  paidAt: z.string().datetime({ offset: true }).nullable(),
+  finalFilesDeliveredAt: z.string().datetime({ offset: true }).nullable(),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+
+const fulfillmentEventSchema = z.object({
+  eventId: z.string().uuid(),
+  fromStatus: fulfillmentStatusSchema.nullable(),
+  toStatus: fulfillmentStatusSchema,
+  createdAt: z.string().datetime({ offset: true }),
+}).strict();
+
 const websiteCustomerListResponseSchema = z.object({
   requests: z.array(customerRequestSummarySchema).max(200), requestId: serviceRequestIdSchema,
 }).strict();
@@ -204,6 +229,13 @@ const websiteCustomerDetailResponseSchema = z.object({
   offers: z.array(customerQuoteOfferSchema).max(100),
   decisions: z.array(customerQuoteDecisionSchema).max(500),
   messages: z.array(customerQuoteMessageSchema).max(1000),
+  fulfillment: fulfillmentSchema.nullable(),
+  fulfillmentEvents: z.array(fulfillmentEventSchema).max(100),
+  requestId: serviceRequestIdSchema,
+}).strict();
+
+const websiteFulfillmentResponseSchema = fulfillmentSchema.extend({
+  emailSent: z.boolean().optional(),
   requestId: serviceRequestIdSchema,
 }).strict();
 
@@ -292,6 +324,7 @@ export interface IntakeQuoteData { status: 'quoted'; emailSent: true }
 
 export type CustomerRequestSummary = z.infer<typeof customerRequestSummarySchema>;
 export type CustomerRequestDetail = Omit<z.infer<typeof websiteCustomerDetailResponseSchema>, 'requestId'>;
+export type FulfillmentStatus = z.infer<typeof fulfillmentStatusSchema>;
 export type CustomerQuoteDecisionInput =
   | { decision: 'approved'; termsAcceptedVersion: string }
   | { decision: 'declined' | 'changes_requested'; reason: string };
@@ -358,6 +391,7 @@ export interface IntakeServiceClient {
   customerMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
   operatorPortalDetail(intakeRequestId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
   operatorMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
+  transitionFulfillment(intakeRequestId: string, status: FulfillmentStatus, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteFulfillmentResponseSchema>, 'requestId'>>>;
   grantCustomerAccess(intakeRequestId: string, customerUserId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<{ status: 'granted' }>>;
 }
 
@@ -781,6 +815,7 @@ export function createIntakeServiceClient(
       return { ok: true, data: {
         request: result.data.request, offers: result.data.offers,
         decisions: result.data.decisions, messages: result.data.messages,
+        fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents,
       } };
     },
 
@@ -823,6 +858,31 @@ export function createIntakeServiceClient(
       return { ok: true, data: {
         request: result.data.request, offers: result.data.offers,
         decisions: result.data.decisions, messages: result.data.messages,
+        fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents,
+      } };
+    },
+
+    async transitionFulfillment(intakeRequestId, status, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const validatedStatus = fulfillmentStatusSchema.parse(status);
+      const result = await execute({
+        path: '/api/internal/operations/intake-requests/' + encodeURIComponent(validatedRequestId) + '/fulfillment',
+        method: 'POST', requestId, actorUserId, body: { status: validatedStatus },
+        successSchema: websiteFulfillmentResponseSchema, allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: {
+        quoteOfferId: result.data.quoteOfferId,
+        status: result.data.status,
+        approvedAt: result.data.approvedAt,
+        startedAt: result.data.startedAt,
+        dueAt: result.data.dueAt,
+        previewReadyAt: result.data.previewReadyAt,
+        paymentPendingAt: result.data.paymentPendingAt,
+        paidAt: result.data.paidAt,
+        finalFilesDeliveredAt: result.data.finalFilesDeliveredAt,
+        updatedAt: result.data.updatedAt,
+        emailSent: result.data.emailSent,
       } };
     },
 

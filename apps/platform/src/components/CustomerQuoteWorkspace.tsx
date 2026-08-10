@@ -12,6 +12,9 @@ export function CustomerQuoteWorkspace({ initialDetail }: { initialDetail: Custo
   const [error, setError] = useState<string | null>(null);
   const latest = initialDetail.offers[0];
   const terminal = latest ? initialDetail.decisions.find((d) => d.quoteOfferId === latest.quoteOfferId && (d.decision === 'approved' || d.decision === 'declined')) : undefined;
+  const fulfillment = initialDetail.fulfillment;
+  const stages = ['accepted', 'in_progress', 'preview_ready', 'payment_pending', 'paid', 'final_files_delivered'] as const;
+  const currentStage = fulfillment ? stages.indexOf(fulfillment.status as typeof stages[number]) : -1;
 
   async function decide(decision: 'approved' | 'declined' | 'changes_requested') {
     if (!latest || busy) return;
@@ -36,6 +39,10 @@ export function CustomerQuoteWorkspace({ initialDetail }: { initialDetail: Custo
 
   return <div className="mt-6 grid gap-6 lg:grid-cols-[1fr_360px]">
     <section className="space-y-6"><div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm"><p className="text-xs font-semibold text-phx-cyan">{initialDetail.request.publicReference}</p><h1 className="mt-2 text-2xl font-extrabold text-phx-navy">{initialDetail.request.company}</h1><p className="mt-2 text-sm text-gray-500">Request status: <strong className="text-phx-navy">{initialDetail.request.status.replaceAll('_', ' ')}</strong></p></div>
+      {fulfillment && <div className="rounded-2xl border border-gray-200 bg-white p-6 shadow-sm">
+        <div className="flex flex-wrap items-start justify-between gap-3"><div><p className="text-xs font-semibold uppercase tracking-wider text-phx-cyan">Project delivery</p><h2 className="mt-1 text-xl font-extrabold capitalize text-phx-navy">{fulfillment.status.replaceAll('_', ' ')}</h2></div><div className="text-right text-xs text-gray-500"><p>Estimated delivery</p><p className="mt-1 font-semibold text-phx-navy">{new Date(fulfillment.dueAt).toLocaleString('en-GB')}</p></div></div>
+        <ol className="mt-6 grid gap-2 sm:grid-cols-3 lg:grid-cols-6">{stages.map((stage, index) => <li key={stage} className={`rounded-lg border px-3 py-3 text-xs font-semibold capitalize ${index <= currentStage ? 'border-cyan-300 bg-cyan-50 text-phx-navy' : 'border-gray-200 text-gray-400'}`}><span className="mr-1">{index < currentStage ? '✓' : index + 1}.</span>{stage.replaceAll('_', ' ')}</li>)}</ol>
+      </div>}
       {latest ? <div className="rounded-2xl border border-cyan-200 bg-white p-6 shadow-sm"><div className="flex items-start justify-between"><div><p className="text-xs font-semibold uppercase tracking-wider text-phx-cyan">Quotation v{latest.version}</p><p className="mt-2 text-3xl font-extrabold text-phx-navy">{latest.currency} {latest.priceAmount.toFixed(2)}</p></div><span className="text-xs text-gray-400">{new Date(latest.sentAt).toLocaleString('en-GB')}</span></div>
         <dl className="mt-6 grid gap-4 sm:grid-cols-2 text-sm"><div><dt className="text-gray-400">Delivery</dt><dd className="font-semibold">{latest.deliveryHours} hours after approval</dd></div><div><dt className="text-gray-400">Revisions</dt><dd className="font-semibold">{latest.revisionRounds} rounds included</dd></div><div><dt className="text-gray-400">Deliverables</dt><dd className="font-semibold">{latest.fileFormats.join(', ')}</dd></div><div><dt className="text-gray-400">Extra revision</dt><dd className="font-semibold">{latest.currency} {latest.additionalRevisionPrice.toFixed(2)}</dd></div></dl>
         <div className="mt-6 rounded-xl bg-gray-50 p-4 text-xs leading-5 text-gray-600 whitespace-pre-wrap">{latest.termsSnapshot}</div>

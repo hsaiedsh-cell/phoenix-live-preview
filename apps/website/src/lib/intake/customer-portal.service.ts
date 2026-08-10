@@ -2,10 +2,15 @@ import {
   addQuoteMessage,
   customerCanAccessRequest,
   listCustomerPortalRequests,
+  getFulfillment,
+  listFulfillmentEvents,
   listQuoteDecisions,
   listQuoteMessages,
   listQuoteOffers,
   recordCustomerDecision,
+  transitionFulfillment,
+  type FulfillmentRow,
+  type FulfillmentStatus,
   type QuoteDecision,
 } from './repositories/customer-portal.repository';
 import { findById } from './repositories/intake-requests.repository';
@@ -38,10 +43,12 @@ export async function getCustomerRequestDetail(requestId: string, customerUserId
   const request = (await listCustomerPortalRequests(customerUserId)).find((item) => item.request_id === requestId);
   if (!request) return null;
 
-  const [offers, decisions, messages] = await Promise.all([
+  const [offers, decisions, messages, fulfillment, fulfillmentEvents] = await Promise.all([
     listQuoteOffers(requestId),
     listQuoteDecisions(requestId),
     listQuoteMessages(requestId),
+    getFulfillment(requestId),
+    listFulfillmentEvents(requestId),
   ]);
 
   return {
@@ -80,14 +87,22 @@ export async function getCustomerRequestDetail(requestId: string, customerUserId
       message: message.message,
       createdAt: message.created_at.toISOString(),
     })),
+    fulfillment: fulfillment ? mapFulfillment(fulfillment) : null,
+    fulfillmentEvents: fulfillmentEvents.map((event) => ({
+      eventId: event.id,
+      fromStatus: event.from_status,
+      toStatus: event.to_status,
+      createdAt: event.created_at.toISOString(),
+    })),
   };
 }
 
 export async function getOperatorRequestPortalDetail(requestId: string) {
   const request = await findById(requestId);
   if (!request) return null;
-  const [offers, decisions, messages] = await Promise.all([
+  const [offers, decisions, messages, fulfillment, fulfillmentEvents] = await Promise.all([
     listQuoteOffers(requestId), listQuoteDecisions(requestId), listQuoteMessages(requestId),
+    getFulfillment(requestId), listFulfillmentEvents(requestId),
   ]);
   return {
     request: {
@@ -109,7 +124,40 @@ export async function getOperatorRequestPortalDetail(requestId: string) {
       messageId: message.id, quoteOfferId: message.quote_offer_id, authorType: message.author_type,
       message: message.message, createdAt: message.created_at.toISOString(),
     })),
+    fulfillment: fulfillment ? mapFulfillment(fulfillment) : null,
+    fulfillmentEvents: fulfillmentEvents.map((event) => ({
+      eventId: event.id, fromStatus: event.from_status, toStatus: event.to_status,
+      createdAt: event.created_at.toISOString(),
+    })),
   };
+}
+
+function mapFulfillment(fulfillment: FulfillmentRow) {
+  return {
+    quoteOfferId: fulfillment.quote_offer_id,
+    status: fulfillment.status,
+    approvedAt: fulfillment.approved_at.toISOString(),
+    startedAt: fulfillment.started_at?.toISOString() ?? null,
+    dueAt: fulfillment.due_at.toISOString(),
+    previewReadyAt: fulfillment.preview_ready_at?.toISOString() ?? null,
+    paymentPendingAt: fulfillment.payment_pending_at?.toISOString() ?? null,
+    paidAt: fulfillment.paid_at?.toISOString() ?? null,
+    finalFilesDeliveredAt: fulfillment.final_files_delivered_at?.toISOString() ?? null,
+    updatedAt: fulfillment.updated_at.toISOString(),
+  };
+}
+
+export async function advanceOperatorFulfillment(input: {
+  requestId: string;
+  toStatus: FulfillmentStatus;
+  operatorUserId: string;
+}) {
+  const fulfillment = await transitionFulfillment({
+    requestId: input.requestId,
+    toStatus: input.toStatus,
+    actorUserId: input.operatorUserId,
+  });
+  return mapFulfillment(fulfillment);
 }
 
 export async function sendOperatorQuoteMessage(input: {

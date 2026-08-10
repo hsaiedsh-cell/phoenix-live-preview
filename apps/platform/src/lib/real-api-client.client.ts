@@ -65,6 +65,8 @@ import {
   type OnboardingInvitationRevokeResult,
   type CustomerPortalDecisionInput,
   type CustomerPortalRequestDetail,
+  type CustomerFulfillment,
+  type FulfillmentStatus,
 } from './real-api-client';
 
 /**
@@ -178,6 +180,16 @@ export async function realSendOperatorCustomerMessage(
   return clientPost(
     `/api/operations/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/messages`,
     { message }
+  );
+}
+
+export async function realTransitionIntakeFulfillment(
+  requestId: string,
+  status: FulfillmentStatus
+): Promise<CustomerFulfillment & { emailSent?: boolean }> {
+  return clientPost(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/fulfillment`,
+    { status }
   );
 }
 

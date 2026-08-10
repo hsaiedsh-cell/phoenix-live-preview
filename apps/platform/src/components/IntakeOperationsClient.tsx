@@ -7,6 +7,7 @@ import {
   realGrantIntakeCustomerAccess,
   realGetOperatorCustomerPortal,
   realSendOperatorCustomerMessage,
+  realTransitionIntakeFulfillment,
   realSendIntakeQuote,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
@@ -25,6 +26,7 @@ import type {
   IntakeRequestType,
   OnboardingInvitationIssueResult,
   CustomerPortalRequestDetail,
+  FulfillmentStatus,
 } from '@/lib/real-api-client';
 
 const STATUSES: IntakeRequestStatus[] = [
@@ -49,6 +51,14 @@ const ALLOWED_ACTIONS: Record<IntakeRequestStatus, IntakeOperatorAction[]> = {
   accepted: ['close'],
   rejected: ['close'],
   closed: [],
+};
+
+const FULFILLMENT_ACTIONS: Partial<Record<FulfillmentStatus, Array<{ status: FulfillmentStatus; label: string }>>> = {
+  accepted: [{ status: 'in_progress', label: 'Start project' }, { status: 'cancelled', label: 'Cancel project' }],
+  in_progress: [{ status: 'preview_ready', label: 'Mark preview ready' }, { status: 'cancelled', label: 'Cancel project' }],
+  preview_ready: [{ status: 'in_progress', label: 'Return to production' }, { status: 'payment_pending', label: 'Request payment' }, { status: 'cancelled', label: 'Cancel project' }],
+  payment_pending: [{ status: 'preview_ready', label: 'Return to preview' }, { status: 'paid', label: 'Mark paid' }, { status: 'cancelled', label: 'Cancel project' }],
+  paid: [{ status: 'final_files_delivered', label: 'Mark final files delivered' }],
 };
 
 function formatBytes(bytes: number): string {
@@ -91,6 +101,8 @@ export function IntakeOperationsClient() {
   const [operatorMessage, setOperatorMessage] = useState('');
   const [operatorMessageLoading, setOperatorMessageLoading] = useState(false);
   const [operatorMessageStatus, setOperatorMessageStatus] = useState<string | null>(null);
+  const [fulfillmentLoading, setFulfillmentLoading] = useState(false);
+  const [fulfillmentStatus, setFulfillmentStatus] = useState<string | null>(null);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -132,6 +144,7 @@ export function IntakeOperationsClient() {
       setQuoteStatus(null);
       setOperatorMessage('');
       setOperatorMessageStatus(null);
+      setFulfillmentStatus(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -182,6 +195,23 @@ export function IntakeOperationsClient() {
       setError(errorMessage(caught));
     } finally {
       setOperatorMessageLoading(false);
+    }
+  }
+
+  async function transitionProject(status: FulfillmentStatus): Promise<void> {
+    if (!selected || !window.confirm(`Move this project to “${status.replaceAll('_', ' ')}”?`)) return;
+    setFulfillmentLoading(true);
+    setError(null);
+    try {
+      const result = await realTransitionIntakeFulfillment(selected.requestId, status);
+      setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));
+      setFulfillmentStatus(result.emailSent
+        ? `Project moved to ${status.replaceAll('_', ' ')} and the customer was notified by email.`
+        : `Project moved to ${status.replaceAll('_', ' ')}, but the email notification could not be sent.`);
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setFulfillmentLoading(false);
     }
   }
 
@@ -404,6 +434,12 @@ export function IntakeOperationsClient() {
               <button disabled={quoteLoading} onClick={() => void sendQuote()} className="mt-3 rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy disabled:opacity-50">{quoteLoading ? 'Sending quotation…' : portalDetail?.offers.length ? `Send quotation V${portalDetail.offers[0].version + 1}` : 'Send quotation & mark quoted'}</button>
             </div>}
             {quoteStatus && <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{quoteStatus}</div>}
+            {portalDetail?.fulfillment && <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
+              <div className="flex items-start justify-between gap-3"><div><h3 className="text-xs font-semibold uppercase tracking-wider text-phx-navy">Project fulfillment</h3><p className="mt-1 text-sm font-bold capitalize text-phx-navy">{portalDetail.fulfillment.status.replaceAll('_', ' ')}</p></div><div className="text-right text-[11px] text-gray-600"><p>Due</p><p className="font-semibold">{new Date(portalDetail.fulfillment.dueAt).toLocaleString()}</p></div></div>
+              <div className="mt-3 flex flex-wrap gap-2">{(FULFILLMENT_ACTIONS[portalDetail.fulfillment.status] ?? []).map((action) => <button key={action.status} disabled={fulfillmentLoading} onClick={() => void transitionProject(action.status)} className="rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{fulfillmentLoading ? 'Updating…' : action.label}</button>)}</div>
+              {fulfillmentStatus && <p role="status" className="mt-2 text-xs text-green-800">{fulfillmentStatus}</p>}
+              {portalDetail.fulfillmentEvents.length > 0 && <div className="mt-3 space-y-1 border-t border-cyan-200 pt-3">{portalDetail.fulfillmentEvents.map((event) => <p key={event.eventId} className="text-[11px] text-gray-600"><strong className="capitalize">{event.toStatus.replaceAll('_', ' ')}</strong> · {new Date(event.createdAt).toLocaleString()}</p>)}</div>}
+            </div>}
             {portalDetail && portalDetail.offers.length > 0 && <div className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-3">
                 <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Customer conversation</h3>

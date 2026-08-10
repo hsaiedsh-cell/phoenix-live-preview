@@ -201,3 +201,27 @@ export function buildPortalMessageEmail(input: {
     idempotencyKey: '',
   };
 }
+
+export function buildFulfillmentUpdateEmail(input: {
+  publicReference: string;
+  firstName: string;
+  status: string;
+  dueAt: Date;
+  portalUrl: string;
+}): SendEmailInput {
+  const label = input.status.replaceAll('_', ' ');
+  const safe = {
+    reference: escapeHtml(input.publicReference),
+    firstName: escapeHtml(input.firstName),
+    label: escapeHtml(label),
+    dueAt: escapeHtml(input.dueAt.toISOString()),
+    portalUrl: escapeHtml(input.portalUrl),
+  };
+  return {
+    to: '',
+    subject: `Phoenix project update — ${input.publicReference}`,
+    text: `Hi ${input.firstName},\n\nYour Phoenix project ${input.publicReference} is now: ${label}.\n\nEstimated delivery: ${input.dueAt.toISOString()}\n\nTrack your project: ${input.portalUrl}\n\n— The Phoenix team`,
+    html: `<p>Hi ${safe.firstName},</p><p>Your Phoenix project <strong>${safe.reference}</strong> is now:</p><p style="font-size:18px;font-weight:700;text-transform:capitalize">${safe.label}</p><p><strong>Estimated delivery:</strong> ${safe.dueAt}</p><p><a href="${safe.portalUrl}">Track your project in the client portal</a></p><p>— The Phoenix team</p>`,
+    idempotencyKey: '',
+  };
+}

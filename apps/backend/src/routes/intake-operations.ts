@@ -17,6 +17,7 @@ import {
   IntakeQueueQueryBodySchema,
   IntakeRequestIdParamsSchema,
   SupportedIntakeActionSchema,
+  FulfillmentTransitionBodySchema,
 } from '../validation/schemas/intake-operations.schemas';
 import { formatZodIssues } from '../validation/zod-response';
 import { sendValidationError } from '../validation/validation-response';
@@ -173,6 +174,23 @@ export function createIntakeOperationsRouter(options: IntakeOperationsRouterOpti
     const result = await client.operatorMessage(params.data.requestId, params.data.quoteOfferId, body.data.message, actor.id, getRequestId(res));
     if (!result.ok) return writeServiceFailure(res, result);
     res.status(201).json(success(result.data, getRequestId(res)));
+  }));
+
+  router.post('/operations/intake-requests/:requestId/fulfillment', asyncHandler(async (req, res) => {
+    const actor = await authorize(req, res);
+    if (!actor) return;
+    const params = IntakeRequestIdParamsSchema.safeParse(req.params);
+    const body = FulfillmentTransitionBodySchema.safeParse(req.body);
+    if (!params.success) return sendValidationError(res, formatZodIssues(params.error));
+    if (!body.success) return sendValidationError(res, formatZodIssues(body.error));
+    const result = await client.transitionFulfillment(
+      params.data.requestId,
+      body.data.status,
+      actor.id,
+      getRequestId(res)
+    );
+    if (!result.ok) return writeServiceFailure(res, result);
+    res.status(200).json(success(result.data, getRequestId(res)));
   }));
 
   return router;

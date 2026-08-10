@@ -300,6 +300,35 @@ export interface CustomerPortalRequestDetail {
     messageId: string; quoteOfferId: string; authorType: 'customer' | 'operator';
     message: string; createdAt: string;
   }>;
+  fulfillment: CustomerFulfillment | null;
+  fulfillmentEvents: Array<{
+    eventId: string;
+    fromStatus: FulfillmentStatus | null;
+    toStatus: FulfillmentStatus;
+    createdAt: string;
+  }>;
+}
+
+export type FulfillmentStatus =
+  | 'accepted'
+  | 'in_progress'
+  | 'preview_ready'
+  | 'payment_pending'
+  | 'paid'
+  | 'final_files_delivered'
+  | 'cancelled';
+
+export interface CustomerFulfillment {
+  quoteOfferId: string;
+  status: FulfillmentStatus;
+  approvedAt: string;
+  startedAt: string | null;
+  dueAt: string;
+  previewReadyAt: string | null;
+  paymentPendingAt: string | null;
+  paidAt: string | null;
+  finalFilesDeliveredAt: string | null;
+  updatedAt: string;
 }
 
 export type CustomerPortalDecisionInput =

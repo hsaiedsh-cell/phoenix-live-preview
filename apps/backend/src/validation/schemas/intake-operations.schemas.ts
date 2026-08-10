@@ -91,3 +91,12 @@ export const CustomerQuoteMessageBodySchema = z.object({
 export const IntakeCustomerAccessBodySchema = z.object({
   customerUserId: z.string().uuid(),
 }).strict();
+
+export const FulfillmentStatusSchema = z.enum([
+  'accepted', 'in_progress', 'preview_ready', 'payment_pending',
+  'paid', 'final_files_delivered', 'cancelled',
+]);
+
+export const FulfillmentTransitionBodySchema = z.object({
+  status: FulfillmentStatusSchema,
+}).strict();

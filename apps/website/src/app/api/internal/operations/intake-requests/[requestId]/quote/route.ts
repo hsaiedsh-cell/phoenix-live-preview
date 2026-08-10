@@ -54,7 +54,8 @@ export async function POST(
   try {
     const intakeRequest = await findById(parsedRequestId.data);
     if (!intakeRequest) return noStore(genericErrorResponse(404, 'Request not found.', correlationId));
-    if (intakeRequest.status !== 'files_received') {
+    const isResend = intakeRequest.status === 'accepted';
+    if (intakeRequest.status !== 'files_received' && !isResend) {
       return noStore(genericErrorResponse(409, 'The request is not ready for quotation.', correlationId));
     }
 
@@ -64,9 +65,15 @@ export async function POST(
       ...quote.data,
     });
     email.to = intakeRequest.work_email_normalized;
-    email.idempotencyKey = `quote/${intakeRequest.id}/${quote.data.currency}-${quote.data.priceAmount.toFixed(2)}`;
+    email.idempotencyKey = isResend
+      ? `quote-resend/${intakeRequest.id}/${correlationId}`
+      : `quote/${intakeRequest.id}/${quote.data.currency}-${quote.data.priceAmount.toFixed(2)}`;
     const sent = await sendEmailSafely(email);
     if (!sent.success) return noStore(genericErrorResponse(503, 'The quotation email could not be sent.', correlationId));
+
+    if (isResend) {
+      return noStore(NextResponse.json({ status: 'quoted', emailSent: true, requestId: correlationId }, { status: 200 }));
+    }
 
     const outcome = await applyOperatorAction(intakeRequest.id, 'quote', actorUserId);
     if (outcome.kind !== 'ok') {

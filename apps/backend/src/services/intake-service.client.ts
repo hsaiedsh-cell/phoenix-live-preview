@@ -96,6 +96,15 @@ const operatorActionHistoryItemSchema = z
   })
   .strict();
 
+const operatorFileSchema = z.object({
+  fileId: z.string().uuid(),
+  originalFilename: z.string().min(1).max(500),
+  contentType: z.string().min(1).max(200),
+  sizeBytes: z.number().int().positive(),
+  scanStatus: z.enum(['pending_review', 'cleared', 'quarantined']),
+  completedAt: z.string().datetime({ offset: true }),
+}).strict();
+
 const operatorRequestDetailSchema = z
   .object({
     requestId: z.string().uuid(),
@@ -116,6 +125,7 @@ const operatorRequestDetailSchema = z
     fileCount: z.number().int().nonnegative(),
     uploadSessionStatus: uploadSessionStatusSchema,
     operatorActions: z.array(operatorActionHistoryItemSchema),
+    files: z.array(operatorFileSchema).max(5),
   })
   .strict();
 
@@ -141,6 +151,12 @@ const websiteUploadInvitationResponseSchema = z
     requestId: serviceRequestIdSchema,
   })
   .strict();
+
+const websiteFileDownloadResponseSchema = z.object({
+  downloadUrl: z.string().url().max(10_000),
+  expiresAt: z.string().datetime({ offset: true }),
+  requestId: serviceRequestIdSchema,
+}).strict();
 
 const websiteErrorResponseSchema = z
   .object({
@@ -195,6 +211,11 @@ export interface IntakeUploadInvitationData {
   emailSent: boolean;
 }
 
+export interface IntakeFileDownloadData {
+  downloadUrl: string;
+  expiresAt: string;
+}
+
 export type IntakeServiceResult<T> =
   | {
       ok: true;
@@ -237,6 +258,12 @@ export interface IntakeServiceClient {
     actorUserId: string,
     requestId: string
   ): Promise<IntakeServiceResult<IntakeUploadInvitationData>>;
+
+  downloadFile(
+    intakeRequestId: string,
+    fileId: string,
+    requestId: string
+  ): Promise<IntakeServiceResult<IntakeFileDownloadData>>;
 }
 
 export interface CreateIntakeServiceClientOptions {
@@ -599,6 +626,28 @@ export function createIntakeServiceClient(
           expiresAt: result.data.expiresAt,
           emailSent: result.data.emailSent,
         },
+      };
+    },
+
+    async downloadFile(intakeRequestId, fileId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const validatedFileId = z.string().uuid().parse(fileId);
+      const result = await execute({
+        path:
+          '/api/internal/operations/intake-requests/' +
+          encodeURIComponent(validatedRequestId) +
+          '/files/' +
+          encodeURIComponent(validatedFileId) +
+          '/download',
+        method: 'GET',
+        requestId,
+        successSchema: websiteFileDownloadResponseSchema,
+        allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return {
+        ok: true,
+        data: { downloadUrl: result.data.downloadUrl, expiresAt: result.data.expiresAt },
       };
     },
   };

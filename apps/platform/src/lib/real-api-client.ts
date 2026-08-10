@@ -239,6 +239,19 @@ export interface IntakeRequestDetail extends IntakeQueueItem {
     to: IntakeRequestStatus;
     createdAt: string;
   }>;
+  files: Array<{
+    fileId: string;
+    originalFilename: string;
+    contentType: string;
+    sizeBytes: number;
+    scanStatus: 'pending_review' | 'cleared' | 'quarantined';
+    completedAt: string;
+  }>;
+}
+
+export interface IntakeFileDownloadResult {
+  downloadUrl: string;
+  expiresAt: string;
 }
 
 export interface IntakeProvisioningInput {

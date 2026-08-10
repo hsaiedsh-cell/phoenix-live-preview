@@ -51,6 +51,10 @@ export const IntakeQueueQueryBodySchema = z
   });
 
 export const IntakeRequestIdParamsSchema = z.object({ requestId: z.string().uuid() }).strict();
+export const IntakeFileParamsSchema = z.object({
+  requestId: z.string().uuid(),
+  fileId: z.string().uuid(),
+}).strict();
 
 export const IntakeActionBodySchema = z
   .object({ action: z.string().trim().min(1).max(50) })

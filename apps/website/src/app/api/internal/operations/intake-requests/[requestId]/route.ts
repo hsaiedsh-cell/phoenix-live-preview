@@ -7,6 +7,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { findOperatorRequestDetailById } from '@/lib/intake/repositories/intake-requests.repository';
 import { listOperatorActionsForRequest } from '@/lib/intake/repositories/intake-events.repository';
+import { listCompletedFilesForRequest } from '@/lib/intake/repositories/intake-files.repository';
 import {
   genericErrorResponse,
   getIntakeServiceRequestId,
@@ -76,6 +77,7 @@ export async function GET(
     const operatorActions = await listOperatorActionsForRequest(
       parsedRequestId.data
     );
+    const files = await listCompletedFilesForRequest(parsedRequestId.data);
 
     logIntakeEvent({
       requestId,
@@ -90,6 +92,7 @@ export async function GET(
           request: {
             ...detail,
             operatorActions,
+            files,
           },
           requestId,
         },

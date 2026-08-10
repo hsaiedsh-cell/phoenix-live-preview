@@ -124,6 +124,7 @@ const DETAIL_RESPONSE = {
         createdAt: '2026-07-31T20:01:00.000Z',
       },
     ],
+    files: [],
   },
   requestId: REQUEST_ID,
 };

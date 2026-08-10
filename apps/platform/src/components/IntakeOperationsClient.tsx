@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   realGetIntakeRequestDetail,
+  realGetIntakeFileDownload,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
   realProvisionIntakeWorkspace,
@@ -34,6 +35,23 @@ const ACTIONS: Array<{ value: IntakeOperatorAction; label: string }> = [
   { value: 'close', label: 'Close' },
 ];
 
+const ALLOWED_ACTIONS: Record<IntakeRequestStatus, IntakeOperatorAction[]> = {
+  received: ['under_review', 'reject', 'close'],
+  under_review: ['quote', 'reject', 'close'],
+  upload_invited: ['reject', 'close'],
+  files_received: ['quote', 'reject', 'close'],
+  quoted: ['accept', 'reject', 'close'],
+  accepted: ['close'],
+  rejected: ['close'],
+  closed: [],
+};
+
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : 'The operation could not be completed.';
 }
@@ -55,6 +73,8 @@ export function IntakeOperationsClient() {
   const [invitationLoading, setInvitationLoading] = useState(false);
   const [invitation, setInvitation] = useState<(OnboardingInvitationIssueResult & { status: 'Issued' | 'Revoked' }) | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [downloadLoadingId, setDownloadLoadingId] = useState<string | null>(null);
+  const [downloadLinks, setDownloadLinks] = useState<Record<string, { url: string; expiresAt: string }>>({});
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -88,10 +108,28 @@ export function IntakeOperationsClient() {
       setProvisioningResult(null);
       setInvitation(null);
       setUploadInvitationStatus(null);
+      setDownloadLinks({});
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function prepareFileDownload(fileId: string): Promise<void> {
+    if (!selected) return;
+    setDownloadLoadingId(fileId);
+    setError(null);
+    try {
+      const result = await realGetIntakeFileDownload(selected.requestId, fileId);
+      setDownloadLinks((current) => ({
+        ...current,
+        [fileId]: { url: result.downloadUrl, expiresAt: result.expiresAt },
+      }));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setDownloadLoadingId(null);
     }
   }
 
@@ -262,7 +300,28 @@ export function IntakeOperationsClient() {
             </dl>
             <div><h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Message</h3>
               <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-gray-600">{selected.message}</p></div>
-            <div className="flex flex-wrap gap-2">{ACTIONS.map((action) => (
+            {selected.files.length > 0 && <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Customer files</h3>
+              <div className="mt-2 space-y-2">{selected.files.map((file) => {
+                const prepared = downloadLinks[file.fileId];
+                return <div key={file.fileId} className="rounded-lg border border-gray-200 p-3 text-xs">
+                  <p className="break-all font-semibold text-phx-navy">{file.originalFilename}</p>
+                  <p className="mt-1 text-gray-500">{file.contentType} · {formatBytes(file.sizeBytes)}</p>
+                  <p className="mt-1 text-gray-500">Security status: <strong>{file.scanStatus}</strong></p>
+                  {file.scanStatus === 'pending_review' && <p className="mt-1 text-amber-700">Unscanned file — open only in an isolated review environment.</p>}
+                  <div className="mt-2">
+                    {prepared ? <a href={prepared.url} target="_blank" rel="noopener noreferrer"
+                      className="font-semibold text-phx-cyan underline">Download now (60-second link)</a> :
+                      <button disabled={downloadLoadingId === file.fileId || file.scanStatus === 'quarantined'}
+                        onClick={() => void prepareFileDownload(file.fileId)}
+                        className="rounded-md border border-gray-200 px-2.5 py-1.5 font-semibold text-phx-navy disabled:opacity-50">
+                        {downloadLoadingId === file.fileId ? 'Preparing…' : file.scanStatus === 'quarantined' ? 'Quarantined' : 'Prepare secure download'}
+                      </button>}
+                  </div>
+                </div>;
+              })}</div>
+            </div>}
+            <div className="flex flex-wrap gap-2">{ACTIONS.filter((action) => ALLOWED_ACTIONS[selected.status].includes(action.value)).map((action) => (
               <button key={action.value} disabled={actionLoading} onClick={() => void runAction(action.value)}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-phx-navy hover:bg-gray-50 disabled:opacity-50">{action.label}</button>
             ))}

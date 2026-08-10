@@ -254,6 +254,17 @@ export interface IntakeFileDownloadResult {
   expiresAt: string;
 }
 
+export interface IntakeQuoteInput {
+  priceAmount: number;
+  currency: 'USD' | 'AED';
+  deliveryHours: number;
+  fileFormats: Array<'AI' | 'SVG' | 'JPEG' | 'PNG' | 'PDF' | 'EPS'>;
+  revisionRounds: number;
+  additionalRevisionPrice: number;
+}
+
+export interface IntakeQuoteResult { status: 'quoted'; emailSent: true }
+
 export interface IntakeProvisioningInput {
   sourceReference: string;
   sourceStatus: 'accepted';

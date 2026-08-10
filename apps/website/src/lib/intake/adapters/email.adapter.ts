@@ -152,3 +152,30 @@ export function buildUploadCompleteInternalEmail(input: { publicReference: strin
     idempotencyKey: '', // caller sets: upload-complete/<uploadSessionId>
   };
 }
+
+export function buildQuoteEmail(input: {
+  publicReference: string;
+  firstName: string;
+  priceAmount: number;
+  currency: 'USD' | 'AED';
+  deliveryHours: number;
+  fileFormats: string[];
+  revisionRounds: number;
+  additionalRevisionPrice: number;
+}): SendEmailInput {
+  const safe = {
+    reference: escapeHtml(input.publicReference),
+    firstName: escapeHtml(input.firstName),
+    currency: escapeHtml(input.currency),
+    formats: escapeHtml(input.fileFormats.join(', ')),
+  };
+  const price = `${input.currency} ${input.priceAmount.toFixed(2)}`;
+  const extraRevision = `${input.currency} ${input.additionalRevisionPrice.toFixed(2)}`;
+  return {
+    to: '',
+    subject: `Phoenix quotation for ${input.publicReference} — ${price}`,
+    text: `Hi ${input.firstName},\n\nWe reviewed your files and prepared the following quotation for request ${input.publicReference}.\n\nPrice: ${price}\nDelivery: ${input.deliveryHours} hours after approval\nDeliverables: ${input.fileFormats.join(', ')}\nIncluded revisions: ${input.revisionRounds} rounds\nAdditional revisions: ${extraRevision} per round\n\nWorkflow:\n1. Reply to approve this quotation.\n2. Phoenix prepares a watermarked or reduced-resolution preview proof.\n3. After final proof approval, Phoenix sends a secure payment link.\n4. Editable and high-resolution final files are released after full payment.\n\nMajor redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing. By approving, you confirm authorization to reproduce the submitted artwork.\n\n— The Phoenix team`,
+    html: `<p>Hi ${safe.firstName},</p><p>We reviewed your files and prepared the following quotation for request <strong>${safe.reference}</strong>.</p><ul><li><strong>Price:</strong> ${safe.currency} ${input.priceAmount.toFixed(2)}</li><li><strong>Delivery:</strong> ${input.deliveryHours} hours after approval</li><li><strong>Deliverables:</strong> ${safe.formats}</li><li><strong>Included revisions:</strong> ${input.revisionRounds} rounds</li><li><strong>Additional revisions:</strong> ${safe.currency} ${input.additionalRevisionPrice.toFixed(2)} per round</li></ul><h3>Workflow</h3><ol><li>Reply to approve this quotation.</li><li>Phoenix prepares a watermarked or reduced-resolution preview proof.</li><li>After final proof approval, Phoenix sends a secure payment link.</li><li>Editable and high-resolution final files are released after full payment.</li></ol><p>Major redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing. By approving, you confirm authorization to reproduce the submitted artwork.</p><p>— The Phoenix team</p>`,
+    idempotencyKey: '',
+  };
+}

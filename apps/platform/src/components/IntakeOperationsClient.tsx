@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   realGetIntakeRequestDetail,
   realGetIntakeFileDownload,
+  realSendIntakeQuote,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
   realProvisionIntakeWorkspace,
@@ -37,9 +38,9 @@ const ACTIONS: Array<{ value: IntakeOperatorAction; label: string }> = [
 
 const ALLOWED_ACTIONS: Record<IntakeRequestStatus, IntakeOperatorAction[]> = {
   received: ['under_review', 'reject', 'close'],
-  under_review: ['quote', 'reject', 'close'],
+  under_review: ['reject', 'close'],
   upload_invited: ['reject', 'close'],
-  files_received: ['quote', 'reject', 'close'],
+  files_received: ['reject', 'close'],
   quoted: ['accept', 'reject', 'close'],
   accepted: ['close'],
   rejected: ['close'],
@@ -75,6 +76,13 @@ export function IntakeOperationsClient() {
   const [error, setError] = useState<string | null>(null);
   const [downloadLoadingId, setDownloadLoadingId] = useState<string | null>(null);
   const [downloadLinks, setDownloadLinks] = useState<Record<string, { url: string; expiresAt: string }>>({});
+  const [quoteLoading, setQuoteLoading] = useState(false);
+  const [quoteStatus, setQuoteStatus] = useState<string | null>(null);
+  const [quotePrice, setQuotePrice] = useState(95);
+  const [quoteCurrency, setQuoteCurrency] = useState<'USD' | 'AED'>('USD');
+  const [quoteDeliveryHours, setQuoteDeliveryHours] = useState(48);
+  const [quoteRevisions, setQuoteRevisions] = useState(3);
+  const [quoteAdditionalRevisionPrice, setQuoteAdditionalRevisionPrice] = useState(20);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -109,10 +117,36 @@ export function IntakeOperationsClient() {
       setInvitation(null);
       setUploadInvitationStatus(null);
       setDownloadLinks({});
+      setQuoteStatus(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setDetailLoading(false);
+    }
+  }
+
+  async function sendQuote(): Promise<void> {
+    if (!selected || selected.status !== 'files_received') return;
+    if (!window.confirm(`Send the ${quoteCurrency} ${quotePrice.toFixed(2)} quotation to ${selected.workEmail}?`)) return;
+    setQuoteLoading(true);
+    setError(null);
+    try {
+      await realSendIntakeQuote(selected.requestId, {
+        priceAmount: quotePrice,
+        currency: quoteCurrency,
+        deliveryHours: quoteDeliveryHours,
+        fileFormats: ['AI', 'SVG', 'JPEG', 'PNG'],
+        revisionRounds: quoteRevisions,
+        additionalRevisionPrice: quoteAdditionalRevisionPrice,
+      });
+      setQuoteStatus('Quotation sent successfully.');
+      const refreshed = await realGetIntakeRequestDetail(selected.requestId);
+      setSelected(refreshed.request);
+      await loadQueue();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setQuoteLoading(false);
     }
   }
 
@@ -321,6 +355,19 @@ export function IntakeOperationsClient() {
                 </div>;
               })}</div>
             </div>}
+            {selected.status === 'files_received' && <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
+              <h3 className="text-xs font-semibold uppercase tracking-wider text-phx-navy">Quotation</h3>
+              <div className="mt-2 grid grid-cols-2 gap-2 text-xs">
+                <label>Price<input type="number" min="1" value={quotePrice} onChange={(e) => setQuotePrice(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" /></label>
+                <label>Currency<select value={quoteCurrency} onChange={(e) => setQuoteCurrency(e.target.value as 'USD' | 'AED')} className="mt-1 w-full rounded border px-2 py-1.5"><option>USD</option><option>AED</option></select></label>
+                <label>Delivery hours<input type="number" min="1" value={quoteDeliveryHours} onChange={(e) => setQuoteDeliveryHours(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" /></label>
+                <label>Revision rounds<input type="number" min="0" value={quoteRevisions} onChange={(e) => setQuoteRevisions(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" /></label>
+                <label className="col-span-2">Additional revision price<input type="number" min="0" value={quoteAdditionalRevisionPrice} onChange={(e) => setQuoteAdditionalRevisionPrice(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" /></label>
+              </div>
+              <p className="mt-2 text-xs text-gray-600">Formats: AI, SVG, JPEG, PNG · Payment after final preview approval and before final file release.</p>
+              <button disabled={quoteLoading} onClick={() => void sendQuote()} className="mt-3 rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy disabled:opacity-50">{quoteLoading ? 'Sending quotation…' : 'Send quotation & mark quoted'}</button>
+            </div>}
+            {quoteStatus && <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{quoteStatus}</div>}
             <div className="flex flex-wrap gap-2">{ACTIONS.filter((action) => ALLOWED_ACTIONS[selected.status].includes(action.value)).map((action) => (
               <button key={action.value} disabled={actionLoading} onClick={() => void runAction(action.value)}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-phx-navy hover:bg-gray-50 disabled:opacity-50">{action.label}</button>

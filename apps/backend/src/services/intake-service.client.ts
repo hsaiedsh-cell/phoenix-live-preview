@@ -158,6 +158,12 @@ const websiteFileDownloadResponseSchema = z.object({
   requestId: serviceRequestIdSchema,
 }).strict();
 
+const websiteQuoteResponseSchema = z.object({
+  status: z.literal('quoted'),
+  emailSent: z.literal(true),
+  requestId: serviceRequestIdSchema,
+}).strict();
+
 const websiteErrorResponseSchema = z
   .object({
     error: z.string().min(1).max(500),
@@ -216,6 +222,17 @@ export interface IntakeFileDownloadData {
   expiresAt: string;
 }
 
+export interface IntakeQuoteInput {
+  priceAmount: number;
+  currency: 'USD' | 'AED';
+  deliveryHours: number;
+  fileFormats: Array<'AI' | 'SVG' | 'JPEG' | 'PNG' | 'PDF' | 'EPS'>;
+  revisionRounds: number;
+  additionalRevisionPrice: number;
+}
+
+export interface IntakeQuoteData { status: 'quoted'; emailSent: true }
+
 export type IntakeServiceResult<T> =
   | {
       ok: true;
@@ -264,6 +281,13 @@ export interface IntakeServiceClient {
     fileId: string,
     requestId: string
   ): Promise<IntakeServiceResult<IntakeFileDownloadData>>;
+
+  quote(
+    intakeRequestId: string,
+    input: IntakeQuoteInput,
+    actorUserId: string,
+    requestId: string
+  ): Promise<IntakeServiceResult<IntakeQuoteData>>;
 }
 
 export interface CreateIntakeServiceClientOptions {
@@ -649,6 +673,21 @@ export function createIntakeServiceClient(
         ok: true,
         data: { downloadUrl: result.data.downloadUrl, expiresAt: result.data.expiresAt },
       };
+    },
+
+    async quote(intakeRequestId, input, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const result = await execute({
+        path: '/api/internal/operations/intake-requests/' + encodeURIComponent(validatedRequestId) + '/quote',
+        method: 'POST',
+        requestId,
+        actorUserId,
+        successSchema: websiteQuoteResponseSchema,
+        body: input,
+        allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: { status: result.data.status, emailSent: result.data.emailSent } };
     },
   };
 }

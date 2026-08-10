@@ -55,6 +55,8 @@ import {
   type IntakeQueueResult,
   type IntakeRequestDetail,
   type IntakeFileDownloadResult,
+  type IntakeQuoteInput,
+  type IntakeQuoteResult,
   type IntakeOperatorAction,
   type IntakeUploadInvitationResult,
   type IntakeProvisioningInput,
@@ -152,6 +154,10 @@ export async function realGetIntakeFileDownload(
   return clientFetch(
     `/api/operations/intake-requests/${encodeURIComponent(requestId)}/files/${encodeURIComponent(fileId)}/download`
   );
+}
+
+export async function realSendIntakeQuote(requestId: string, input: IntakeQuoteInput): Promise<IntakeQuoteResult> {
+  return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/quote`, input);
 }
 
 export async function realRunIntakeAction(

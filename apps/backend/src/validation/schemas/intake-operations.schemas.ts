@@ -60,6 +60,15 @@ export const IntakeActionBodySchema = z
   .object({ action: z.string().trim().min(1).max(50) })
   .strict();
 
+export const IntakeQuoteBodySchema = z.object({
+  priceAmount: z.number().positive().max(1_000_000),
+  currency: z.enum(['USD', 'AED']),
+  deliveryHours: z.number().int().min(1).max(720),
+  fileFormats: z.array(z.enum(['AI', 'SVG', 'JPEG', 'PNG', 'PDF', 'EPS'])).min(1).max(6),
+  revisionRounds: z.number().int().min(0).max(20),
+  additionalRevisionPrice: z.number().nonnegative().max(100_000),
+}).strict();
+
 export const SupportedIntakeActionSchema = z.enum([
   'under_review', 'reject', 'quote', 'accept', 'close',
 ]);

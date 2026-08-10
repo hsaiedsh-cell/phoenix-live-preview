@@ -22,7 +22,13 @@ import { SignIn } from '@clerk/nextjs';
 import { AlphaNotice } from '@/components/AlphaNotice';
 import type { PhoenixApiConfig } from '@/lib/api-config';
 
-export function ClerkSignInPanel({ apiConfig }: { apiConfig: PhoenixApiConfig }) {
+export function ClerkSignInPanel({
+  apiConfig,
+  redirectUrl,
+}: {
+  apiConfig: PhoenixApiConfig;
+  redirectUrl?: string;
+}) {
   if (!apiConfig.clerkConfigured || apiConfig.isMisconfigured) {
     return (
       <div className="bg-white border border-red-200 rounded-2xl p-8 shadow-sm text-center">
@@ -46,6 +52,7 @@ export function ClerkSignInPanel({ apiConfig }: { apiConfig: PhoenixApiConfig })
         <SignIn
           routing="hash"
           signUpUrl="/login"
+          forceRedirectUrl={redirectUrl}
           appearance={{
             elements: {
               rootBox: 'w-full',

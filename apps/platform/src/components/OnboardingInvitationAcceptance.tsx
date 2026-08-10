@@ -33,7 +33,7 @@ export function OnboardingInvitationAcceptance() {
         <p className="text-xs font-bold uppercase tracking-widest text-phx-cyan">Phoenix onboarding</p>
         <h1 className="mt-3 text-xl font-extrabold text-phx-navy">{content[0]}</h1>
         <p className="mt-3 text-sm leading-6 text-gray-500">{content[1]}</p>
-        {state === 'accepted' && <Link href="/login" className="mt-6 inline-flex rounded-lg bg-phx-navy px-5 py-3 text-sm font-semibold text-white">Continue to sign in</Link>}
+        {state === 'accepted' && <Link href="/customer" className="mt-6 inline-flex rounded-lg bg-phx-navy px-5 py-3 text-sm font-semibold text-white">Open client portal</Link>}
       </div>
     </main>
   );

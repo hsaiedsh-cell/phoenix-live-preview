@@ -18,7 +18,17 @@ function PhoenixMark() {
   );
 }
 
-export default function LoginPage() {
+function safeRedirectUrl(value: string | string[] | undefined): string | undefined {
+  const candidate = Array.isArray(value) ? value[0] : value;
+  if (!candidate || !candidate.startsWith('/') || candidate.startsWith('//')) return undefined;
+  return candidate;
+}
+
+export default async function LoginPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ redirect_url?: string | string[] }>;
+}) {
   // PHX-PLATFORM-010 — production-auth mode renders Clerk's hosted sign-in
   // instead of the mock login form below. mock/real-dev are completely
   // unchanged from PHX-PLATFORM-006/008 — this branch is checked first and
@@ -27,6 +37,7 @@ export default function LoginPage() {
   // ClerkProviderShell.tsx) and renders the same hosted sign-in panel.
   const apiConfig = getPhoenixApiConfig();
   if (apiConfig.mode === 'production-auth' || apiConfig.mode === 'vercel-supabase-preview') {
+    const redirectUrl = safeRedirectUrl((await searchParams).redirect_url);
     return (
       <div className="min-h-screen bg-phx-surface flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">
@@ -35,7 +46,7 @@ export default function LoginPage() {
               <PhoenixMark />
             </Link>
           </div>
-          <ClerkSignInPanel apiConfig={apiConfig} />
+          <ClerkSignInPanel apiConfig={apiConfig} redirectUrl={redirectUrl} />
         </div>
       </div>
     );

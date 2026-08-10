@@ -57,6 +57,9 @@ export const serverConfig = {
   get intakeFromEmail(): string {
     return process.env.INTAKE_FROM_EMAIL || 'hello@phoenixops.ai';
   },
+  get intakeReplyToEmail(): string {
+    return process.env.INTAKE_REPLY_TO_EMAIL || 'hello@phoenixops.ai';
+  },
   get intakeInternalToEmail(): string {
     return process.env.INTAKE_INTERNAL_TO_EMAIL || 'hello@phoenixops.ai';
   },

@@ -55,6 +55,7 @@ export function createLiveEmailSender(): EmailSender {
         const result = await client.emails.send(
           {
             from: serverConfig.intakeFromEmail,
+            replyTo: serverConfig.intakeReplyToEmail,
             to: input.to,
             subject: input.subject,
             html: input.html,

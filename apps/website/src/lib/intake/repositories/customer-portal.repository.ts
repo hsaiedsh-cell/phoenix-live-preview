@@ -15,6 +15,7 @@ export interface QuoteOfferRow {
   file_formats: QuoteFileFormat[];
   revision_rounds: number;
   additional_revision_price: string;
+  delivery_idempotency_key: string;
   terms_snapshot: string;
   sent_by_actor_user_id: string;
   sent_at: Date;
@@ -52,6 +53,7 @@ export interface CreateQuoteOfferInput {
   additionalRevisionPrice: number;
   termsSnapshot: string;
   actorUserId: string;
+  deliveryIdempotencyKey: string;
 }
 
 export interface CustomerPortalRequestRow {
@@ -130,11 +132,12 @@ export async function createQuoteOffer(input: CreateQuoteOfferInput): Promise<Qu
       `INSERT INTO public_intake_quote_offers (
          request_id, version, price_amount, currency, delivery_hours,
          file_formats, revision_rounds, additional_revision_price,
-         terms_snapshot, sent_by_actor_user_id
+         terms_snapshot, sent_by_actor_user_id, delivery_idempotency_key
        )
-       SELECT $1, COALESCE(MAX(version), 0) + 1, $2,$3,$4,$5,$6,$7,$8,$9
+       SELECT $1, COALESCE(MAX(version), 0) + 1, $2,$3,$4,$5,$6,$7,$8,$9,$10
        FROM public_intake_quote_offers
        WHERE request_id = $1
+       ON CONFLICT (delivery_idempotency_key) DO NOTHING
        RETURNING *`,
       [
         input.requestId,
@@ -146,9 +149,17 @@ export async function createQuoteOffer(input: CreateQuoteOfferInput): Promise<Qu
         input.additionalRevisionPrice,
         input.termsSnapshot,
         input.actorUserId,
+        input.deliveryIdempotencyKey,
       ]
     );
-    return rows[0];
+    if (rows[0]) return rows[0];
+    const replay = await query<QuoteOfferRow>(
+      `SELECT * FROM public_intake_quote_offers
+       WHERE delivery_idempotency_key = $1 AND request_id = $2`,
+      [input.deliveryIdempotencyKey, input.requestId]
+    );
+    if (!replay[0]) throw new Error('portal_quote_idempotency_conflict');
+    return replay[0];
   });
 }
 

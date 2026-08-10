@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
+import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { sendEmailSafely } from '@/lib/intake/adapters';
 import { buildQuoteEmail } from '@/lib/intake/adapters/email.adapter';
 import { applyOperatorAction } from '@/lib/intake/operator-actions.service';
 import { findById } from '@/lib/intake/repositories/intake-requests.repository';
+import { createQuoteOffer } from '@/lib/intake/repositories/customer-portal.repository';
 import {
   genericErrorResponse,
   getIntakeServiceActorUserId,
@@ -70,6 +72,27 @@ export async function POST(
       : `quote/${intakeRequest.id}/${quote.data.currency}-${quote.data.priceAmount.toFixed(2)}`;
     const sent = await sendEmailSafely(email);
     if (!sent.success) return noStore(genericErrorResponse(503, 'The quotation email could not be sent.', correlationId));
+
+    const termsSnapshot = [
+      `Delivery: ${quote.data.deliveryHours} hours after approval.`,
+      `Deliverables: ${quote.data.fileFormats.join(', ')}.`,
+      `Included revisions: ${quote.data.revisionRounds} rounds.`,
+      `Additional revisions: ${quote.data.currency} ${quote.data.additionalRevisionPrice.toFixed(2)} per round.`,
+      'Phoenix provides a preview proof before payment. Final editable and high-resolution files are released after full payment.',
+      'Major redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing.',
+    ].join('\n');
+    const offerFingerprint = createHash('sha256').update(JSON.stringify({
+      requestId: intakeRequest.id,
+      ...quote.data,
+      termsSnapshot,
+    })).digest('hex');
+    await createQuoteOffer({
+      requestId: intakeRequest.id,
+      ...quote.data,
+      termsSnapshot,
+      actorUserId,
+      deliveryIdempotencyKey: `quote-offer/${intakeRequest.id}/${offerFingerprint}`,
+    });
 
     if (isResend) {
       return noStore(NextResponse.json({ status: 'quoted', emailSent: true, requestId: correlationId }, { status: 200 }));

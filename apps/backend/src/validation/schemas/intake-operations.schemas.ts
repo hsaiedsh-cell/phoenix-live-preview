@@ -102,7 +102,7 @@ export const FulfillmentTransitionBodySchema = z.object({
 }).strict();
 export const PreviewSignBodySchema=z.object({filename:z.string().trim().min(1).max(255),contentType:z.enum(['application/pdf','image/png','image/jpeg']),sizeBytes:z.number().int().min(1).max(20*1024*1024)}).strict();
 export const PreviewCompleteBodySchema=z.object({previewProofId:z.string().uuid(),storageObjectKey:z.string().min(1).max(500)}).strict();
-export const FinalDeliverableSignBodySchema=z.object({filename:z.string().trim().min(1).max(255),contentType:z.enum(['application/zip','application/x-zip-compressed']),sizeBytes:z.number().int().min(1).max(60*1024*1024)}).strict();
+export const FinalDeliverableSignBodySchema=z.object({filename:z.string().trim().min(1).max(255),contentType:z.enum(['application/zip','application/x-zip-compressed']),sizeBytes:z.number().int().min(1).max(50*1024*1024)}).strict();
 export const FinalDeliverableCompleteBodySchema=z.object({finalDeliverableId:z.string().uuid(),storageObjectKey:z.string().min(1).max(500)}).strict();
 export const PreviewDecisionParamsSchema=z.object({requestId:z.string().uuid(),previewProofId:z.string().uuid()}).strict();
 export const PreviewDecisionBodySchema=z.discriminatedUnion('decision',[z.object({decision:z.literal('approved')}).strict(),z.object({decision:z.literal('revision_requested'),reason:z.string().trim().min(1).max(4000)}).strict()]);

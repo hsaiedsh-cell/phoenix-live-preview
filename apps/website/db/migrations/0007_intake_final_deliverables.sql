@@ -5,7 +5,7 @@ CREATE TABLE IF NOT EXISTS public_intake_final_deliverables (
   original_filename text NOT NULL CHECK (char_length(original_filename) BETWEEN 1 AND 255),
   storage_object_key text NOT NULL UNIQUE,
   content_type text NOT NULL CHECK (content_type IN ('application/zip','application/x-zip-compressed')),
-  size_bytes bigint NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 62914560),
+  size_bytes bigint NOT NULL CHECK (size_bytes > 0 AND size_bytes <= 52428800),
   status text NOT NULL DEFAULT 'uploading' CHECK (status IN ('uploading','ready')),
   uploaded_by_actor_user_id text NOT NULL,
   created_at timestamptz NOT NULL DEFAULT now(),

@@ -11,6 +11,7 @@ import {
   IntakeActionBodySchema,
   IntakeFileParamsSchema,
   IntakeQuoteBodySchema,
+  IntakeCustomerAccessBodySchema,
   IntakeQueueQueryBodySchema,
   IntakeRequestIdParamsSchema,
   SupportedIntakeActionSchema,
@@ -134,6 +135,18 @@ export function createIntakeOperationsRouter(options: IntakeOperationsRouterOpti
       return;
     }
     const result = await client.quote(params.data.requestId, body.data, actor.id, getRequestId(res));
+    if (!result.ok) return writeServiceFailure(res, result);
+    res.status(200).json(success(result.data, getRequestId(res)));
+  }));
+
+  router.post('/operations/intake-requests/:requestId/customer-access', asyncHandler(async (req, res) => {
+    const actor = await authorize(req, res);
+    if (!actor) return;
+    const params = IntakeRequestIdParamsSchema.safeParse(req.params);
+    const body = IntakeCustomerAccessBodySchema.safeParse(req.body);
+    if (!params.success) return sendValidationError(res, formatZodIssues(params.error));
+    if (!body.success) return sendValidationError(res, formatZodIssues(body.error));
+    const result = await client.grantCustomerAccess(params.data.requestId, body.data.customerUserId, actor.id, getRequestId(res));
     if (!result.ok) return writeServiceFailure(res, result);
     res.status(200).json(success(result.data, getRequestId(res)));
   }));

@@ -216,6 +216,10 @@ const websiteCustomerMessageResponseSchema = z.object({
   messageId: z.string().uuid(), createdAt: z.string().datetime({ offset: true }), requestId: serviceRequestIdSchema,
 }).strict();
 
+const websiteCustomerAccessResponseSchema = z.object({
+  status: z.literal('granted'), requestId: serviceRequestIdSchema,
+}).strict();
+
 const websiteErrorResponseSchema = z
   .object({
     error: z.string().min(1).max(500),
@@ -351,6 +355,7 @@ export interface IntakeServiceClient {
   customerDetail(intakeRequestId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
   customerDecision(intakeRequestId: string, quoteOfferId: string, input: CustomerQuoteDecisionInput, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerDecisionResponseSchema>, 'requestId'>>>;
   customerMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
+  grantCustomerAccess(intakeRequestId: string, customerUserId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<{ status: 'granted' }>>;
 }
 
 export interface CreateIntakeServiceClientOptions {
@@ -802,6 +807,18 @@ export function createIntakeServiceClient(
       });
       if (!result.ok) return result;
       return { ok: true, data: { messageId: result.data.messageId, createdAt: result.data.createdAt } };
+    },
+
+    async grantCustomerAccess(intakeRequestId, customerUserId, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const validatedCustomerUserId = z.string().uuid().parse(customerUserId);
+      const result = await execute({
+        path: '/api/internal/operations/intake-requests/' + encodeURIComponent(validatedRequestId) + '/customer-access',
+        method: 'POST', requestId, actorUserId, body: { customerUserId: validatedCustomerUserId },
+        successSchema: websiteCustomerAccessResponseSchema, allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: { status: result.data.status } };
     },
   };
 }

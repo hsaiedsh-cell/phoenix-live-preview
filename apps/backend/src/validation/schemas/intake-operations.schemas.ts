@@ -87,3 +87,7 @@ export const CustomerQuoteDecisionBodySchema = z.discriminatedUnion('decision', 
 export const CustomerQuoteMessageBodySchema = z.object({
   message: z.string().trim().min(1).max(4000),
 }).strict();
+
+export const IntakeCustomerAccessBodySchema = z.object({
+  customerUserId: z.string().uuid(),
+}).strict();

@@ -161,6 +161,10 @@ export async function realSendIntakeQuote(requestId: string, input: IntakeQuoteI
   return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/quote`, input);
 }
 
+export async function realGrantIntakeCustomerAccess(requestId: string, customerUserId: string): Promise<{ status: 'granted' }> {
+  return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/customer-access`, { customerUserId });
+}
+
 export async function realSubmitCustomerPortalDecision(
   requestId: string,
   quoteOfferId: string,

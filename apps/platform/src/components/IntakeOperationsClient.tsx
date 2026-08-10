@@ -4,6 +4,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   realGetIntakeRequestDetail,
   realGetIntakeFileDownload,
+  realGrantIntakeCustomerAccess,
   realSendIntakeQuote,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
@@ -225,6 +226,7 @@ export function IntakeOperationsClient() {
         lastName: selected.lastName,
         workEmail: selected.workEmail,
       });
+      await realGrantIntakeCustomerAccess(selected.requestId, result.primaryUserId);
       setProvisioningResult(result);
     } catch (caught) {
       setError(errorMessage(caught));

@@ -265,6 +265,47 @@ export interface IntakeQuoteInput {
 
 export interface IntakeQuoteResult { status: 'quoted'; emailSent: true }
 
+export interface CustomerPortalRequestSummary {
+  requestId: string;
+  publicReference: string;
+  requestType: IntakeRequestType;
+  company: string;
+  status: IntakeRequestStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerPortalQuoteOffer {
+  quoteOfferId: string;
+  version: number;
+  priceAmount: number;
+  currency: 'USD' | 'AED';
+  deliveryHours: number;
+  fileFormats: Array<'AI' | 'SVG' | 'JPEG' | 'PNG' | 'PDF' | 'EPS'>;
+  revisionRounds: number;
+  additionalRevisionPrice: number;
+  termsSnapshot: string;
+  sentAt: string;
+}
+
+export interface CustomerPortalRequestDetail {
+  request: CustomerPortalRequestSummary;
+  offers: CustomerPortalQuoteOffer[];
+  decisions: Array<{
+    decisionId: string; quoteOfferId: string;
+    decision: 'approved' | 'declined' | 'changes_requested';
+    reason: string | null; createdAt: string;
+  }>;
+  messages: Array<{
+    messageId: string; quoteOfferId: string; authorType: 'customer' | 'operator';
+    message: string; createdAt: string;
+  }>;
+}
+
+export type CustomerPortalDecisionInput =
+  | { decision: 'approved'; termsAcceptedVersion: string }
+  | { decision: 'declined' | 'changes_requested'; reason: string };
+
 export interface IntakeProvisioningInput {
   sourceReference: string;
   sourceStatus: 'accepted';

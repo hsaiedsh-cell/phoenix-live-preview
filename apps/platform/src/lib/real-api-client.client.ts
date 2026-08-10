@@ -63,6 +63,7 @@ import {
   type IntakeProvisioningResult,
   type OnboardingInvitationIssueResult,
   type OnboardingInvitationRevokeResult,
+  type CustomerPortalDecisionInput,
 } from './real-api-client';
 
 /**
@@ -158,6 +159,28 @@ export async function realGetIntakeFileDownload(
 
 export async function realSendIntakeQuote(requestId: string, input: IntakeQuoteInput): Promise<IntakeQuoteResult> {
   return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/quote`, input);
+}
+
+export async function realSubmitCustomerPortalDecision(
+  requestId: string,
+  quoteOfferId: string,
+  input: CustomerPortalDecisionInput
+): Promise<{ decisionId: string; decision: string; createdAt: string }> {
+  return clientPost(
+    `/api/customer/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/decisions`,
+    input
+  );
+}
+
+export async function realSendCustomerPortalMessage(
+  requestId: string,
+  quoteOfferId: string,
+  message: string
+): Promise<{ messageId: string; createdAt: string }> {
+  return clientPost(
+    `/api/customer/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/messages`,
+    { message }
+  );
 }
 
 export async function realRunIntakeAction(

@@ -196,6 +196,7 @@ const customerQuoteMessageSchema = z.object({
 }).strict();
 const previewProofSchema=z.object({previewProofId:z.string().uuid(),version:z.number().int().positive(),filename:z.string(),contentType:z.string(),sizeBytes:z.number().int().positive(),status:z.enum(['ready','superseded']),createdAt:z.string().datetime({offset:true}),downloadUrl:z.string().url()}).strict();
 const previewDecisionSchema=z.object({decisionId:z.string().uuid(),previewProofId:z.string().uuid(),decision:z.enum(['approved','revision_requested']),reason:z.string().nullable(),createdAt:z.string().datetime({offset:true})}).strict();
+const finalDeliverableSchema=z.object({finalDeliverableId:z.string().uuid(),filename:z.string(),contentType:z.string(),sizeBytes:z.number().int().positive(),createdAt:z.string().datetime({offset:true}),downloadUrl:z.string().url()}).strict();
 
 const fulfillmentStatusSchema = z.enum([
   'accepted', 'in_progress', 'preview_ready', 'payment_pending',
@@ -235,6 +236,7 @@ const websiteCustomerDetailResponseSchema = z.object({
   fulfillmentEvents: z.array(fulfillmentEventSchema).max(100),
   previews:z.array(previewProofSchema).max(100),
   previewDecisions:z.array(previewDecisionSchema).max(500),
+  finalDeliverables:z.array(finalDeliverableSchema).max(100),
   requestId: serviceRequestIdSchema,
 }).strict();
 
@@ -244,6 +246,8 @@ const websiteFulfillmentResponseSchema = fulfillmentSchema.extend({
 }).strict();
 const previewSignResponseSchema=z.object({previewProofId:z.string().uuid(),uploadUrl:z.string().url(),storageObjectKey:z.string(),requestId:serviceRequestIdSchema}).strict();
 const previewCompleteResponseSchema=z.object({status:z.literal('ready'),requestId:serviceRequestIdSchema}).strict();
+const finalDeliverableSignResponseSchema=z.object({finalDeliverableId:z.string().uuid(),uploadUrl:z.string().url(),storageObjectKey:z.string(),requestId:serviceRequestIdSchema}).strict();
+const finalDeliverableCompleteResponseSchema=z.object({status:z.literal('ready'),requestId:serviceRequestIdSchema}).strict();
 const previewDecisionResponseSchema=z.object({decisionId:z.string().uuid(),decision:z.enum(['approved','revision_requested']),createdAt:z.string().datetime({offset:true}),requestId:serviceRequestIdSchema}).strict();
 
 const websiteCustomerDecisionResponseSchema = z.object({
@@ -401,6 +405,8 @@ export interface IntakeServiceClient {
   transitionFulfillment(intakeRequestId: string, status: FulfillmentStatus, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteFulfillmentResponseSchema>, 'requestId'>>>;
   signPreview(intakeRequestId:string,input:{filename:string;contentType:string;sizeBytes:number},actorUserId:string,requestId:string):Promise<IntakeServiceResult<Omit<z.infer<typeof previewSignResponseSchema>,'requestId'>>>;
   completePreview(intakeRequestId:string,input:{previewProofId:string;storageObjectKey:string},requestId:string):Promise<IntakeServiceResult<{status:'ready'}>>;
+  signFinalDeliverable(intakeRequestId:string,input:{filename:string;contentType:string;sizeBytes:number},actorUserId:string,requestId:string):Promise<IntakeServiceResult<Omit<z.infer<typeof finalDeliverableSignResponseSchema>,'requestId'>>>;
+  completeFinalDeliverable(intakeRequestId:string,input:{finalDeliverableId:string;storageObjectKey:string},requestId:string):Promise<IntakeServiceResult<{status:'ready'}>>;
   decidePreview(intakeRequestId:string,previewProofId:string,input:{decision:'approved'}|{decision:'revision_requested';reason:string},actorUserId:string,requestId:string):Promise<IntakeServiceResult<Omit<z.infer<typeof previewDecisionResponseSchema>,'requestId'>>>;
   grantCustomerAccess(intakeRequestId: string, customerUserId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<{ status: 'granted' }>>;
 }
@@ -825,7 +831,7 @@ export function createIntakeServiceClient(
       return { ok: true, data: {
         request: result.data.request, offers: result.data.offers,
         decisions: result.data.decisions, messages: result.data.messages,
-        fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents, previews:result.data.previews,previewDecisions:result.data.previewDecisions,
+        fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents, previews:result.data.previews,previewDecisions:result.data.previewDecisions,finalDeliverables:result.data.finalDeliverables,
       } };
     },
 
@@ -868,7 +874,7 @@ export function createIntakeServiceClient(
       return { ok: true, data: {
         request: result.data.request, offers: result.data.offers,
         decisions: result.data.decisions, messages: result.data.messages,
-        fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents, previews:result.data.previews,previewDecisions:result.data.previewDecisions,
+        fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents, previews:result.data.previews,previewDecisions:result.data.previewDecisions,finalDeliverables:result.data.finalDeliverables,
       } };
     },
 
@@ -897,6 +903,8 @@ export function createIntakeServiceClient(
     },
     async signPreview(intakeRequestId,input,actorUserId,requestId){const result=await execute({path:'/api/internal/operations/intake-requests/'+encodeURIComponent(intakeRequestId)+'/preview-proofs/sign',method:'POST',requestId,actorUserId,body:input,successSchema:previewSignResponseSchema,allowedUpstreamStatuses:[404,409]});if(!result.ok)return result;return{ok:true,data:{previewProofId:result.data.previewProofId,uploadUrl:result.data.uploadUrl,storageObjectKey:result.data.storageObjectKey}};},
     async completePreview(intakeRequestId,input,requestId){const result=await execute({path:'/api/internal/operations/intake-requests/'+encodeURIComponent(intakeRequestId)+'/preview-proofs/complete',method:'POST',requestId,body:input,successSchema:previewCompleteResponseSchema,allowedUpstreamStatuses:[404,409]});if(!result.ok)return result;return{ok:true,data:{status:'ready'}};},
+    async signFinalDeliverable(intakeRequestId,input,actorUserId,requestId){const result=await execute({path:'/api/internal/operations/intake-requests/'+encodeURIComponent(intakeRequestId)+'/final-deliverables/sign',method:'POST',requestId,actorUserId,body:input,successSchema:finalDeliverableSignResponseSchema,allowedUpstreamStatuses:[404,409]});if(!result.ok)return result;return{ok:true,data:{finalDeliverableId:result.data.finalDeliverableId,uploadUrl:result.data.uploadUrl,storageObjectKey:result.data.storageObjectKey}};},
+    async completeFinalDeliverable(intakeRequestId,input,requestId){const result=await execute({path:'/api/internal/operations/intake-requests/'+encodeURIComponent(intakeRequestId)+'/final-deliverables/complete',method:'POST',requestId,body:input,successSchema:finalDeliverableCompleteResponseSchema,allowedUpstreamStatuses:[404,409]});if(!result.ok)return result;return{ok:true,data:{status:'ready'}};},
     async decidePreview(intakeRequestId,previewProofId,input,actorUserId,requestId){const result=await execute({path:'/api/internal/customer/intake-requests/'+encodeURIComponent(intakeRequestId)+'/preview-proofs/'+encodeURIComponent(previewProofId)+'/decisions',method:'POST',requestId,actorUserId,body:input,successSchema:previewDecisionResponseSchema,allowedUpstreamStatuses:[404,409]});if(!result.ok)return result;return{ok:true,data:{decisionId:result.data.decisionId,decision:result.data.decision,createdAt:result.data.createdAt}};},
 
     async operatorMessage(intakeRequestId, quoteOfferId, message, actorUserId, requestId) {

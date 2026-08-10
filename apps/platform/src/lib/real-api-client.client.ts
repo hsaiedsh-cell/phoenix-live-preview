@@ -194,6 +194,8 @@ export async function realTransitionIntakeFulfillment(
 }
 export async function realSignPreviewProof(requestId:string,input:{filename:string;contentType:string;sizeBytes:number}){return clientPost<{previewProofId:string;uploadUrl:string;storageObjectKey:string}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/sign`,input);}
 export async function realCompletePreviewProof(requestId:string,input:{previewProofId:string;storageObjectKey:string}){return clientPost<{status:'ready'}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/complete`,input);}
+export async function realSignFinalDeliverable(requestId:string,input:{filename:string;contentType:'application/zip'|'application/x-zip-compressed';sizeBytes:number}){return clientPost<{finalDeliverableId:string;uploadUrl:string;storageObjectKey:string}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/sign`,input);}
+export async function realCompleteFinalDeliverable(requestId:string,input:{finalDeliverableId:string;storageObjectKey:string}){return clientPost<{status:'ready'}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/complete`,input);}
 export async function realDecidePreviewProof(requestId:string,previewProofId:string,input:{decision:'approved'}|{decision:'revision_requested';reason:string}){return clientPost<{decisionId:string;decision:string;createdAt:string}>(`/api/customer/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/${encodeURIComponent(previewProofId)}/decisions`,input);}
 
 export async function realSubmitCustomerPortalDecision(

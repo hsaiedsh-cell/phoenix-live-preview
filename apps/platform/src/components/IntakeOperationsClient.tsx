@@ -9,6 +9,7 @@ import {
   realSendOperatorCustomerMessage,
   realTransitionIntakeFulfillment,
   realSignPreviewProof,realCompletePreviewProof,
+  realSignFinalDeliverable,realCompleteFinalDeliverable,
   realSendIntakeQuote,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
@@ -106,6 +107,8 @@ export function IntakeOperationsClient() {
   const [fulfillmentStatus, setFulfillmentStatus] = useState<string | null>(null);
   const [previewUploading,setPreviewUploading]=useState(false);
   const [previewStatus,setPreviewStatus]=useState<string|null>(null);
+  const [finalDeliverableUploading,setFinalDeliverableUploading]=useState(false);
+  const [finalDeliverableStatus,setFinalDeliverableStatus]=useState<string|null>(null);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -218,6 +221,7 @@ export function IntakeOperationsClient() {
     }
   }
   async function uploadPreview(file:File){if(!selected)return;setPreviewUploading(true);setError(null);try{const signed=await realSignPreviewProof(selected.requestId,{filename:file.name,contentType:file.type,sizeBytes:file.size});const put=await fetch(signed.uploadUrl,{method:'PUT',headers:{'Content-Type':file.type},body:file});if(!put.ok)throw new Error('Preview upload failed.');await realCompletePreviewProof(selected.requestId,{previewProofId:signed.previewProofId,storageObjectKey:signed.storageObjectKey});setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));setPreviewStatus('Preview proof uploaded securely.');}catch(caught){setError(errorMessage(caught));}finally{setPreviewUploading(false);}}
+  async function uploadFinalDeliverable(file:File){if(!selected)return;setFinalDeliverableUploading(true);setError(null);setFinalDeliverableStatus(null);try{const contentType:'application/zip'='application/zip';const signed=await realSignFinalDeliverable(selected.requestId,{filename:file.name,contentType,sizeBytes:file.size});const put=await fetch(signed.uploadUrl,{method:'PUT',headers:{'Content-Type':contentType},body:file});if(!put.ok)throw new Error('Final deliverable upload failed.');await realCompleteFinalDeliverable(selected.requestId,{finalDeliverableId:signed.finalDeliverableId,storageObjectKey:signed.storageObjectKey});setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));setFinalDeliverableStatus('Final deliverable uploaded securely. You can now mark the final files delivered.');}catch(caught){setError(errorMessage(caught));}finally{setFinalDeliverableUploading(false);}}
 
   async function prepareFileDownload(fileId: string): Promise<void> {
     if (!selected) return;
@@ -440,11 +444,14 @@ export function IntakeOperationsClient() {
             {quoteStatus && <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{quoteStatus}</div>}
             {portalDetail?.fulfillment && <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
               <div className="flex items-start justify-between gap-3"><div><h3 className="text-xs font-semibold uppercase tracking-wider text-phx-navy">Project fulfillment</h3><p className="mt-1 text-sm font-bold capitalize text-phx-navy">{portalDetail.fulfillment.status.replaceAll('_', ' ')}</p></div><div className="text-right text-[11px] text-gray-600"><p>Due</p><p className="font-semibold">{new Date(portalDetail.fulfillment.dueAt).toLocaleString()}</p></div></div>
-              <div className="mt-3 flex flex-wrap gap-2">{(FULFILLMENT_ACTIONS[portalDetail.fulfillment.status] ?? []).map((action) => <button key={action.status} disabled={fulfillmentLoading} onClick={() => void transitionProject(action.status)} className="rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{fulfillmentLoading ? 'Updating…' : action.label}</button>)}</div>
+              <div className="mt-3 flex flex-wrap gap-2">{(FULFILLMENT_ACTIONS[portalDetail.fulfillment.status] ?? []).map((action) => {const finalBlocked=action.status==='final_files_delivered'&&portalDetail.finalDeliverables.length===0;return <button key={action.status} disabled={fulfillmentLoading||finalBlocked} title={finalBlocked?'Upload the final ZIP first.':undefined} onClick={() => void transitionProject(action.status)} className="rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{fulfillmentLoading ? 'Updating…' : action.label}</button>;})}</div>
               {fulfillmentStatus && <p role="status" className="mt-2 text-xs text-green-800">{fulfillmentStatus}</p>}
               {portalDetail.fulfillmentEvents.length > 0 && <div className="mt-3 space-y-1 border-t border-cyan-200 pt-3">{portalDetail.fulfillmentEvents.map((event) => <p key={event.eventId} className="text-[11px] text-gray-600"><strong className="capitalize">{event.toStatus.replaceAll('_', ' ')}</strong> · {new Date(event.createdAt).toLocaleString()}</p>)}</div>}
               {['preview_ready','in_progress'].includes(portalDetail.fulfillment.status)&&<label className="mt-3 block rounded-lg border border-dashed border-cyan-300 bg-white p-3 text-xs font-semibold text-phx-navy">{previewUploading?'Uploading preview…':'Upload preview proof (PDF, PNG, JPEG)'}<input type="file" accept="application/pdf,image/png,image/jpeg" disabled={previewUploading} className="mt-2 block w-full text-xs" onChange={(e)=>{const file=e.target.files?.[0];if(file)void uploadPreview(file);}}/></label>}
               {previewStatus&&<p role="status" className="mt-2 text-xs text-green-800">{previewStatus}</p>}
+              {portalDetail.fulfillment.status==='paid'&&<label className="mt-3 block rounded-lg border border-dashed border-green-300 bg-white p-3 text-xs font-semibold text-phx-navy">{finalDeliverableUploading?'Uploading final files…':'Upload final deliverable (ZIP, up to 60 MB)'}<input type="file" accept=".zip,application/zip,application/x-zip-compressed" disabled={finalDeliverableUploading} className="mt-2 block w-full text-xs" onChange={(e)=>{const file=e.target.files?.[0];if(file)void uploadFinalDeliverable(file);}}/></label>}
+              {finalDeliverableStatus&&<p role="status" className="mt-2 text-xs text-green-800">{finalDeliverableStatus}</p>}
+              {portalDetail.finalDeliverables.length>0&&<div className="mt-3 space-y-2 border-t border-cyan-200 pt-3"><p className="text-xs font-semibold text-phx-navy">Final deliverables</p>{portalDetail.finalDeliverables.map((file)=><a key={file.finalDeliverableId} href={file.downloadUrl} target="_blank" rel="noopener noreferrer" className="block break-all text-xs font-semibold text-phx-cyan underline">{file.filename} · {formatBytes(file.sizeBytes)}</a>)}</div>}
             </div>}
             {portalDetail && portalDetail.offers.length > 0 && <div className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-3">

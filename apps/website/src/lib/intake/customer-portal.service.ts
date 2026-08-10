@@ -15,6 +15,7 @@ import {
 } from './repositories/customer-portal.repository';
 import { findById } from './repositories/intake-requests.repository';
 import { getPreviewProofs } from './preview-proof.service';
+import { getFinalDeliverables } from './final-deliverable.service';
 
 export interface CustomerPortalRequestSummary {
   requestId: string;
@@ -44,13 +45,14 @@ export async function getCustomerRequestDetail(requestId: string, customerUserId
   const request = (await listCustomerPortalRequests(customerUserId)).find((item) => item.request_id === requestId);
   if (!request) return null;
 
-  const [offers, decisions, messages, fulfillment, fulfillmentEvents, previews] = await Promise.all([
+  const [offers, decisions, messages, fulfillment, fulfillmentEvents, previews, finalDeliverables] = await Promise.all([
     listQuoteOffers(requestId),
     listQuoteDecisions(requestId),
     listQuoteMessages(requestId),
     getFulfillment(requestId),
     listFulfillmentEvents(requestId),
     getPreviewProofs(requestId, customerUserId),
+    getFinalDeliverables(requestId, customerUserId),
   ]);
 
   return {
@@ -98,15 +100,17 @@ export async function getCustomerRequestDetail(requestId: string, customerUserId
     })),
     previews: previews?.proofs ?? [],
     previewDecisions: previews?.decisions ?? [],
+    finalDeliverables: finalDeliverables ?? [],
   };
 }
 
 export async function getOperatorRequestPortalDetail(requestId: string) {
   const request = await findById(requestId);
   if (!request) return null;
-  const [offers, decisions, messages, fulfillment, fulfillmentEvents, previews] = await Promise.all([
+  const [offers, decisions, messages, fulfillment, fulfillmentEvents, previews, finalDeliverables] = await Promise.all([
     listQuoteOffers(requestId), listQuoteDecisions(requestId), listQuoteMessages(requestId),
     getFulfillment(requestId), listFulfillmentEvents(requestId), getPreviewProofs(requestId),
+    getFinalDeliverables(requestId),
   ]);
   return {
     request: {
@@ -135,6 +139,7 @@ export async function getOperatorRequestPortalDetail(requestId: string) {
     })),
     previews: previews?.proofs ?? [],
     previewDecisions: previews?.decisions ?? [],
+    finalDeliverables: finalDeliverables ?? [],
   };
 }
 

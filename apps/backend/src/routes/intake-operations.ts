@@ -18,6 +18,7 @@ import {
   IntakeRequestIdParamsSchema,
   SupportedIntakeActionSchema,
   FulfillmentTransitionBodySchema,
+  PreviewSignBodySchema,PreviewCompleteBodySchema,
 } from '../validation/schemas/intake-operations.schemas';
 import { formatZodIssues } from '../validation/zod-response';
 import { sendValidationError } from '../validation/validation-response';
@@ -192,6 +193,8 @@ export function createIntakeOperationsRouter(options: IntakeOperationsRouterOpti
     if (!result.ok) return writeServiceFailure(res, result);
     res.status(200).json(success(result.data, getRequestId(res)));
   }));
+  router.post('/operations/intake-requests/:requestId/preview-proofs/sign',asyncHandler(async(req,res)=>{const actor=await authorize(req,res);if(!actor)return;const p=IntakeRequestIdParamsSchema.safeParse(req.params);const b=PreviewSignBodySchema.safeParse(req.body);if(!p.success)return sendValidationError(res,formatZodIssues(p.error));if(!b.success)return sendValidationError(res,formatZodIssues(b.error));const result=await client.signPreview(p.data.requestId,b.data,actor.id,getRequestId(res));if(!result.ok)return writeServiceFailure(res,result);res.status(200).json(success(result.data,getRequestId(res)));}));
+  router.post('/operations/intake-requests/:requestId/preview-proofs/complete',asyncHandler(async(req,res)=>{const actor=await authorize(req,res);if(!actor)return;const p=IntakeRequestIdParamsSchema.safeParse(req.params);const b=PreviewCompleteBodySchema.safeParse(req.body);if(!p.success)return sendValidationError(res,formatZodIssues(p.error));if(!b.success)return sendValidationError(res,formatZodIssues(b.error));const result=await client.completePreview(p.data.requestId,b.data,getRequestId(res));if(!result.ok)return writeServiceFailure(res,result);res.status(200).json(success(result.data,getRequestId(res)));}));
 
   return router;
 }

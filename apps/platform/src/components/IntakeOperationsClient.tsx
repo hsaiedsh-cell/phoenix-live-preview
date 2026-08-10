@@ -8,6 +8,7 @@ import {
   realGetOperatorCustomerPortal,
   realSendOperatorCustomerMessage,
   realTransitionIntakeFulfillment,
+  realSignPreviewProof,realCompletePreviewProof,
   realSendIntakeQuote,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
@@ -103,6 +104,8 @@ export function IntakeOperationsClient() {
   const [operatorMessageStatus, setOperatorMessageStatus] = useState<string | null>(null);
   const [fulfillmentLoading, setFulfillmentLoading] = useState(false);
   const [fulfillmentStatus, setFulfillmentStatus] = useState<string | null>(null);
+  const [previewUploading,setPreviewUploading]=useState(false);
+  const [previewStatus,setPreviewStatus]=useState<string|null>(null);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -214,6 +217,7 @@ export function IntakeOperationsClient() {
       setFulfillmentLoading(false);
     }
   }
+  async function uploadPreview(file:File){if(!selected)return;setPreviewUploading(true);setError(null);try{const signed=await realSignPreviewProof(selected.requestId,{filename:file.name,contentType:file.type,sizeBytes:file.size});const put=await fetch(signed.uploadUrl,{method:'PUT',headers:{'Content-Type':file.type},body:file});if(!put.ok)throw new Error('Preview upload failed.');await realCompletePreviewProof(selected.requestId,{previewProofId:signed.previewProofId,storageObjectKey:signed.storageObjectKey});setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));setPreviewStatus('Preview proof uploaded securely.');}catch(caught){setError(errorMessage(caught));}finally{setPreviewUploading(false);}}
 
   async function prepareFileDownload(fileId: string): Promise<void> {
     if (!selected) return;
@@ -439,6 +443,8 @@ export function IntakeOperationsClient() {
               <div className="mt-3 flex flex-wrap gap-2">{(FULFILLMENT_ACTIONS[portalDetail.fulfillment.status] ?? []).map((action) => <button key={action.status} disabled={fulfillmentLoading} onClick={() => void transitionProject(action.status)} className="rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{fulfillmentLoading ? 'Updating…' : action.label}</button>)}</div>
               {fulfillmentStatus && <p role="status" className="mt-2 text-xs text-green-800">{fulfillmentStatus}</p>}
               {portalDetail.fulfillmentEvents.length > 0 && <div className="mt-3 space-y-1 border-t border-cyan-200 pt-3">{portalDetail.fulfillmentEvents.map((event) => <p key={event.eventId} className="text-[11px] text-gray-600"><strong className="capitalize">{event.toStatus.replaceAll('_', ' ')}</strong> · {new Date(event.createdAt).toLocaleString()}</p>)}</div>}
+              {['preview_ready','in_progress'].includes(portalDetail.fulfillment.status)&&<label className="mt-3 block rounded-lg border border-dashed border-cyan-300 bg-white p-3 text-xs font-semibold text-phx-navy">{previewUploading?'Uploading preview…':'Upload preview proof (PDF, PNG, JPEG)'}<input type="file" accept="application/pdf,image/png,image/jpeg" disabled={previewUploading} className="mt-2 block w-full text-xs" onChange={(e)=>{const file=e.target.files?.[0];if(file)void uploadPreview(file);}}/></label>}
+              {previewStatus&&<p role="status" className="mt-2 text-xs text-green-800">{previewStatus}</p>}
             </div>}
             {portalDetail && portalDetail.offers.length > 0 && <div className="rounded-lg border border-gray-200 p-3">
               <div className="flex items-center justify-between gap-3">

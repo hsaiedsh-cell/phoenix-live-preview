@@ -8,6 +8,7 @@ import {
   CustomerQuoteMessageBodySchema,
   CustomerQuoteParamsSchema,
   IntakeRequestIdParamsSchema,
+  PreviewDecisionParamsSchema,PreviewDecisionBodySchema,
 } from '../validation/schemas/intake-operations.schemas';
 import { formatZodIssues } from '../validation/zod-response';
 import { sendValidationError } from '../validation/validation-response';
@@ -71,3 +72,4 @@ customerPortalRouter.post('/customer/intake-requests/:requestId/quotes/:quoteOff
   if (!result.ok) return writeCustomerServiceFailure(res, result);
   res.status(201).json(success(result.data, getRequestId(res)));
 }));
+customerPortalRouter.post('/customer/intake-requests/:requestId/preview-proofs/:previewProofId/decisions',asyncHandler(async(req,res)=>{const actor=await requireAuthenticatedPhoenixUser(req,res);if(!actor)return;const p=PreviewDecisionParamsSchema.safeParse(req.params);const b=PreviewDecisionBodySchema.safeParse(req.body);if(!p.success)return sendValidationError(res,formatZodIssues(p.error));if(!b.success)return sendValidationError(res,formatZodIssues(b.error));const result=await client.decidePreview(p.data.requestId,p.data.previewProofId,b.data,actor.id,getRequestId(res));if(!result.ok)return writeCustomerServiceFailure(res,result);res.status(201).json(success(result.data,getRequestId(res)));}));

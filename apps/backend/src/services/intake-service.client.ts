@@ -355,6 +355,8 @@ export interface IntakeServiceClient {
   customerDetail(intakeRequestId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
   customerDecision(intakeRequestId: string, quoteOfferId: string, input: CustomerQuoteDecisionInput, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerDecisionResponseSchema>, 'requestId'>>>;
   customerMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
+  operatorPortalDetail(intakeRequestId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
+  operatorMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
   grantCustomerAccess(intakeRequestId: string, customerUserId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<{ status: 'granted' }>>;
 }
 
@@ -801,6 +803,33 @@ export function createIntakeServiceClient(
       const validatedOfferId = z.string().uuid().parse(quoteOfferId);
       const result = await execute({
         path: '/api/internal/customer/intake-requests/' + encodeURIComponent(validatedRequestId) +
+          '/quotes/' + encodeURIComponent(validatedOfferId) + '/messages',
+        method: 'POST', requestId, actorUserId, body: { message },
+        successSchema: websiteCustomerMessageResponseSchema, allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: { messageId: result.data.messageId, createdAt: result.data.createdAt } };
+    },
+
+    async operatorPortalDetail(intakeRequestId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const result = await execute({
+        path: '/api/internal/operations/intake-requests/' + encodeURIComponent(validatedRequestId) + '/customer-portal',
+        method: 'GET', requestId, successSchema: websiteCustomerDetailResponseSchema,
+        allowedUpstreamStatuses: [404],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: {
+        request: result.data.request, offers: result.data.offers,
+        decisions: result.data.decisions, messages: result.data.messages,
+      } };
+    },
+
+    async operatorMessage(intakeRequestId, quoteOfferId, message, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const validatedOfferId = z.string().uuid().parse(quoteOfferId);
+      const result = await execute({
+        path: '/api/internal/operations/intake-requests/' + encodeURIComponent(validatedRequestId) +
           '/quotes/' + encodeURIComponent(validatedOfferId) + '/messages',
         method: 'POST', requestId, actorUserId, body: { message },
         successSchema: websiteCustomerMessageResponseSchema, allowedUpstreamStatuses: [404, 409],

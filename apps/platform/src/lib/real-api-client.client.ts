@@ -64,6 +64,7 @@ import {
   type OnboardingInvitationIssueResult,
   type OnboardingInvitationRevokeResult,
   type CustomerPortalDecisionInput,
+  type CustomerPortalRequestDetail,
 } from './real-api-client';
 
 /**
@@ -163,6 +164,21 @@ export async function realSendIntakeQuote(requestId: string, input: IntakeQuoteI
 
 export async function realGrantIntakeCustomerAccess(requestId: string, customerUserId: string): Promise<{ status: 'granted' }> {
   return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/customer-access`, { customerUserId });
+}
+
+export async function realGetOperatorCustomerPortal(requestId: string): Promise<CustomerPortalRequestDetail> {
+  return clientFetch(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/customer-portal`);
+}
+
+export async function realSendOperatorCustomerMessage(
+  requestId: string,
+  quoteOfferId: string,
+  message: string
+): Promise<{ messageId: string; createdAt: string }> {
+  return clientPost(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/messages`,
+    { message }
+  );
 }
 
 export async function realSubmitCustomerPortalDecision(

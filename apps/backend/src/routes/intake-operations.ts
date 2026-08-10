@@ -12,6 +12,8 @@ import {
   IntakeFileParamsSchema,
   IntakeQuoteBodySchema,
   IntakeCustomerAccessBodySchema,
+  CustomerQuoteMessageBodySchema,
+  CustomerQuoteParamsSchema,
   IntakeQueueQueryBodySchema,
   IntakeRequestIdParamsSchema,
   SupportedIntakeActionSchema,
@@ -149,6 +151,28 @@ export function createIntakeOperationsRouter(options: IntakeOperationsRouterOpti
     const result = await client.grantCustomerAccess(params.data.requestId, body.data.customerUserId, actor.id, getRequestId(res));
     if (!result.ok) return writeServiceFailure(res, result);
     res.status(200).json(success(result.data, getRequestId(res)));
+  }));
+
+  router.get('/operations/intake-requests/:requestId/customer-portal', asyncHandler(async (req, res) => {
+    const actor = await authorize(req, res);
+    if (!actor) return;
+    const params = IntakeRequestIdParamsSchema.safeParse(req.params);
+    if (!params.success) return sendValidationError(res, formatZodIssues(params.error));
+    const result = await client.operatorPortalDetail(params.data.requestId, getRequestId(res));
+    if (!result.ok) return writeServiceFailure(res, result);
+    res.status(200).json(success(result.data, getRequestId(res)));
+  }));
+
+  router.post('/operations/intake-requests/:requestId/quotes/:quoteOfferId/messages', asyncHandler(async (req, res) => {
+    const actor = await authorize(req, res);
+    if (!actor) return;
+    const params = CustomerQuoteParamsSchema.safeParse(req.params);
+    const body = CustomerQuoteMessageBodySchema.safeParse(req.body);
+    if (!params.success) return sendValidationError(res, formatZodIssues(params.error));
+    if (!body.success) return sendValidationError(res, formatZodIssues(body.error));
+    const result = await client.operatorMessage(params.data.requestId, params.data.quoteOfferId, body.data.message, actor.id, getRequestId(res));
+    if (!result.ok) return writeServiceFailure(res, result);
+    res.status(201).json(success(result.data, getRequestId(res)));
   }));
 
   return router;

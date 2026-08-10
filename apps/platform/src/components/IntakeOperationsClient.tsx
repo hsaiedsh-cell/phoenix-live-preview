@@ -5,6 +5,8 @@ import {
   realGetIntakeRequestDetail,
   realGetIntakeFileDownload,
   realGrantIntakeCustomerAccess,
+  realGetOperatorCustomerPortal,
+  realSendOperatorCustomerMessage,
   realSendIntakeQuote,
   realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
@@ -22,6 +24,7 @@ import type {
   IntakeRequestStatus,
   IntakeRequestType,
   OnboardingInvitationIssueResult,
+  CustomerPortalRequestDetail,
 } from '@/lib/real-api-client';
 
 const STATUSES: IntakeRequestStatus[] = [
@@ -84,6 +87,9 @@ export function IntakeOperationsClient() {
   const [quoteDeliveryHours, setQuoteDeliveryHours] = useState(48);
   const [quoteRevisions, setQuoteRevisions] = useState(3);
   const [quoteAdditionalRevisionPrice, setQuoteAdditionalRevisionPrice] = useState(20);
+  const [portalDetail, setPortalDetail] = useState<CustomerPortalRequestDetail | null>(null);
+  const [operatorMessage, setOperatorMessage] = useState('');
+  const [operatorMessageLoading, setOperatorMessageLoading] = useState(false);
 
   const loadQueue = useCallback(async () => {
     setLoading(true);
@@ -112,13 +118,18 @@ export function IntakeOperationsClient() {
     setDetailLoading(true);
     setError(null);
     try {
-      const result = await realGetIntakeRequestDetail(requestId);
+      const [result, portal] = await Promise.all([
+        realGetIntakeRequestDetail(requestId),
+        realGetOperatorCustomerPortal(requestId),
+      ]);
       setSelected(result.request);
+      setPortalDetail(portal);
       setProvisioningResult(null);
       setInvitation(null);
       setUploadInvitationStatus(null);
       setDownloadLinks({});
       setQuoteStatus(null);
+      setOperatorMessage('');
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -143,11 +154,29 @@ export function IntakeOperationsClient() {
       setQuoteStatus('Quotation sent successfully.');
       const refreshed = await realGetIntakeRequestDetail(selected.requestId);
       setSelected(refreshed.request);
+      setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));
       await loadQueue();
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
       setQuoteLoading(false);
+    }
+  }
+
+  async function sendOperatorMessage(): Promise<void> {
+    const latestOffer = portalDetail?.offers[0];
+    const message = operatorMessage.trim();
+    if (!selected || !latestOffer || !message) return;
+    setOperatorMessageLoading(true);
+    setError(null);
+    try {
+      await realSendOperatorCustomerMessage(selected.requestId, latestOffer.quoteOfferId, message);
+      setOperatorMessage('');
+      setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setOperatorMessageLoading(false);
     }
   }
 
@@ -367,9 +396,31 @@ export function IntakeOperationsClient() {
                 <label className="col-span-2">Additional revision price<input type="number" min="0" value={quoteAdditionalRevisionPrice} onChange={(e) => setQuoteAdditionalRevisionPrice(Number(e.target.value))} className="mt-1 w-full rounded border px-2 py-1.5" /></label>
               </div>
               <p className="mt-2 text-xs text-gray-600">Formats: AI, SVG, JPEG, PNG · Payment after final preview approval and before final file release.</p>
-              <button disabled={quoteLoading} onClick={() => void sendQuote()} className="mt-3 rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy disabled:opacity-50">{quoteLoading ? 'Sending quotation…' : selected.status === 'accepted' ? 'Resend quotation' : 'Send quotation & mark quoted'}</button>
+              <button disabled={quoteLoading} onClick={() => void sendQuote()} className="mt-3 rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy disabled:opacity-50">{quoteLoading ? 'Sending quotation…' : portalDetail?.offers.length ? `Send quotation V${portalDetail.offers[0].version + 1}` : 'Send quotation & mark quoted'}</button>
             </div>}
             {quoteStatus && <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">{quoteStatus}</div>}
+            {portalDetail && portalDetail.offers.length > 0 && <div className="rounded-lg border border-gray-200 p-3">
+              <div className="flex items-center justify-between gap-3">
+                <h3 className="text-xs font-semibold uppercase tracking-wider text-gray-400">Customer conversation</h3>
+                <span className="text-[11px] text-gray-400">Latest quote: V{portalDetail.offers[0].version}</span>
+              </div>
+              <div className="mt-3 max-h-64 space-y-2 overflow-y-auto">
+                {portalDetail.messages.length === 0 ? <p className="text-xs text-gray-500">No messages yet.</p> : portalDetail.messages.map((entry) => (
+                  <div key={entry.messageId} className={`rounded-lg px-3 py-2 text-xs ${entry.authorType === 'customer' ? 'bg-cyan-50 text-phx-navy' : 'bg-gray-100 text-gray-700'}`}>
+                    <p className="font-semibold">{entry.authorType === 'customer' ? 'Customer' : 'Phoenix'}</p>
+                    <p className="mt-1 whitespace-pre-wrap">{entry.message}</p>
+                    <p className="mt-1 text-[10px] text-gray-400">{new Date(entry.createdAt).toLocaleString()}</p>
+                  </div>
+                ))}
+              </div>
+              <textarea value={operatorMessage} onChange={(event) => setOperatorMessage(event.target.value)} maxLength={4000}
+                placeholder="Reply to the customer or explain a revised quotation…"
+                className="mt-3 min-h-24 w-full rounded-lg border border-gray-200 px-3 py-2 text-xs" />
+              <button disabled={operatorMessageLoading || !operatorMessage.trim()} onClick={() => void sendOperatorMessage()}
+                className="mt-2 rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">
+                {operatorMessageLoading ? 'Sending…' : 'Send reply'}
+              </button>
+            </div>}
             <div className="flex flex-wrap gap-2">{ACTIONS.filter((action) => ALLOWED_ACTIONS[selected.status].includes(action.value)).map((action) => (
               <button key={action.value} disabled={actionLoading} onClick={() => void runAction(action.value)}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-phx-navy hover:bg-gray-50 disabled:opacity-50">{action.label}</button>

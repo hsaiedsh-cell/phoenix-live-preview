@@ -92,6 +92,19 @@ export function createIntakeOperationsRouter(options: IntakeOperationsRouterOpti
     res.status(200).json(success(result.data, getRequestId(res)));
   }));
 
+  router.post('/operations/intake-requests/:requestId/upload-invitation', asyncHandler(async (req, res) => {
+    const actor = await authorize(req, res);
+    if (!actor) return;
+    const parsed = IntakeRequestIdParamsSchema.safeParse(req.params);
+    if (!parsed.success) {
+      sendValidationError(res, formatZodIssues(parsed.error));
+      return;
+    }
+    const result = await client.inviteUpload(parsed.data.requestId, actor.id, getRequestId(res));
+    if (!result.ok) return writeServiceFailure(res, result);
+    res.status(200).json(success(result.data, getRequestId(res)));
+  }));
+
   return router;
 }
 

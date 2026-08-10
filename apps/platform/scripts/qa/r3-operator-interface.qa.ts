@@ -20,6 +20,9 @@ const clientAuth = readFileSync(resolve(root, 'src/lib/auth/platform-auth.client
 check(client.includes("clientPost('/api/operations/intake-requests/query', input)"), 'queue uses the protected Backend POST route');
 check(client.includes('/api/operations/intake-requests/${encodeURIComponent(requestId)}'), 'detail uses an encoded fixed Backend path');
 check(client.includes('/actions`, { action }'), 'action body contains only the action property');
+check(client.includes('/upload-invitation`') && client.includes('realIssueIntakeUploadInvitation'), 'upload invitation uses the protected fixed Backend route');
+check(component.includes("selected.status === 'under_review'"), 'upload invitation control is limited to requests under review');
+check(component.includes('Send upload invitation') && component.includes('result.emailSent'), 'operator UI reports invitation delivery outcome');
 check(client.includes("clientPost('/api/operations/intake-workspace-handoffs', input)"), 'provisioning uses the protected fixed Backend route');
 check(component.includes("selected.status === 'accepted'"), 'provisioning control is limited to accepted requests');
 check(component.includes("sourceStatus: 'accepted'"), 'provisioning sends the backend-required accepted source status');

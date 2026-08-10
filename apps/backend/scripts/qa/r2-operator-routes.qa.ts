@@ -20,7 +20,18 @@ async function main(): Promise<void> {
   };
   let detailResult: IntakeServiceResult<{ request: never }> = { ok: false, kind: 'upstream', status: 404 };
   let actionResult: IntakeServiceResult<{ status: 'under_review' }> = { ok: true, data: { status: 'under_review' } };
+  let inviteResult: IntakeServiceResult<{
+    status: 'upload_invited'; expiresAt: string; emailSent: boolean;
+  }> = {
+    ok: true,
+    data: {
+      status: 'upload_invited',
+      expiresAt: '2026-08-11T16:00:00.000Z',
+      emailSent: true,
+    },
+  };
   let attributedActor = '';
+  let invitationActor = '';
 
   const client: IntakeServiceClient = {
     query: async () => queryResult,
@@ -28,6 +39,10 @@ async function main(): Promise<void> {
     action: async (_id, _action, actor) => {
       attributedActor = actor;
       return actionResult;
+    },
+    inviteUpload: async (_id, actor) => {
+      invitationActor = actor;
+      return inviteResult;
     },
   };
 
@@ -82,6 +97,15 @@ async function main(): Promise<void> {
     });
     check(response.status === 200 && attributedActor === ACTOR_UUID, 'action forwards only the authorized database actor id');
 
+    response = await fetch(`${base}/${REQUEST_UUID}/upload-invitation`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    body = await response.json() as typeof body;
+    check(
+      response.status === 200 && invitationActor === ACTOR_UUID,
+      'upload invitation forwards only the authorized database actor id'
+    );
+
     queryResult = { ok: false, kind: 'unavailable' };
     response = await fetch(`${base}/query`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' });
     body = await response.json() as typeof body;
@@ -98,6 +122,13 @@ async function main(): Promise<void> {
     });
     body = await response.json() as typeof body;
     check(response.status === 409 && body.error?.code === 'CONFLICT', 'transition conflict maps to 409 CONFLICT');
+
+    inviteResult = { ok: false, kind: 'upstream', status: 409 };
+    response = await fetch(`${base}/${REQUEST_UUID}/upload-invitation`, {
+      method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}',
+    });
+    body = await response.json() as typeof body;
+    check(response.status === 409 && body.error?.code === 'CONFLICT', 'active or invalid upload invitation maps to 409 CONFLICT');
   } finally {
     await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
   }

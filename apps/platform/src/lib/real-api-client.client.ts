@@ -55,6 +55,7 @@ import {
   type IntakeQueueResult,
   type IntakeRequestDetail,
   type IntakeOperatorAction,
+  type IntakeUploadInvitationResult,
   type IntakeProvisioningInput,
   type IntakeProvisioningResult,
   type OnboardingInvitationIssueResult,
@@ -148,6 +149,15 @@ export async function realRunIntakeAction(
   action: IntakeOperatorAction
 ): Promise<{ status: string }> {
   return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/actions`, { action });
+}
+
+export async function realIssueIntakeUploadInvitation(
+  requestId: string
+): Promise<IntakeUploadInvitationResult> {
+  return clientPost(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/upload-invitation`,
+    {}
+  );
 }
 
 export async function realProvisionIntakeWorkspace(

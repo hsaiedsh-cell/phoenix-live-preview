@@ -44,7 +44,10 @@ export type IssueUploadSessionOutcome =
  * active, unexpired session still blocks with session_already_active,
  * exactly as before.
  */
-export async function issueUploadSession(requestId: string): Promise<IssueUploadSessionOutcome> {
+export async function issueUploadSession(
+  requestId: string,
+  actorUserId?: string
+): Promise<IssueUploadSessionOutcome> {
   const rawToken = generateRawUploadToken();
 
   const transactionResult = await withIntakeTransaction(async (query) => {
@@ -70,17 +73,23 @@ export async function issueUploadSession(requestId: string): Promise<IssueUpload
       await eventsRepo.recordEventInTransaction(query, requestId, 'request.status_changed', {
         from: lockedRequest.status,
         to: 'upload_invited',
+        ...(actorUserId ? { actorUserId, source: 'phoenix_backend' } : {}),
       });
     } else {
       // R5 (§1): replacement -- no fake same-status transition. A
       // dedicated core event marks this specifically as a reissue,
       // distinct from the initial invitation.
-      await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_reissued');
+      await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_reissued', {
+        ...(actorUserId ? { actorUserId, source: 'phoenix_backend' } : {}),
+      });
     }
 
     const session = await uploadSessionsRepo.createUploadSessionInTransaction(query, requestId, tokenHash(rawToken));
-    await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_created');
-    await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_invited');
+    const operatorDetail = actorUserId
+      ? { actorUserId, source: 'phoenix_backend' }
+      : undefined;
+    await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_session_created', operatorDetail);
+    await eventsRepo.recordEventInTransaction(query, requestId, 'request.upload_invited', operatorDetail);
     return {
       kind: 'ok' as const,
       session,

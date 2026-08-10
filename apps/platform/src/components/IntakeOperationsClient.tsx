@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   realGetIntakeRequestDetail,
+  realIssueIntakeUploadInvitation,
   realIssueOnboardingInvitation,
   realProvisionIntakeWorkspace,
   realQueryIntakeRequests,
@@ -47,6 +48,8 @@ export function IntakeOperationsClient() {
   const [loading, setLoading] = useState(true);
   const [detailLoading, setDetailLoading] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
+  const [uploadInvitationLoading, setUploadInvitationLoading] = useState(false);
+  const [uploadInvitationStatus, setUploadInvitationStatus] = useState<string | null>(null);
   const [provisioningLoading, setProvisioningLoading] = useState(false);
   const [provisioningResult, setProvisioningResult] = useState<IntakeProvisioningResult | null>(null);
   const [invitationLoading, setInvitationLoading] = useState(false);
@@ -84,6 +87,7 @@ export function IntakeOperationsClient() {
       setSelected(result.request);
       setProvisioningResult(null);
       setInvitation(null);
+      setUploadInvitationStatus(null);
     } catch (caught) {
       setError(errorMessage(caught));
     } finally {
@@ -173,6 +177,29 @@ export function IntakeOperationsClient() {
     }
   }
 
+  async function issueUploadInvitation(): Promise<void> {
+    if (!selected || selected.status !== 'under_review') return;
+    if (!window.confirm(`Send a 24-hour upload invitation to ${selected.workEmail}?`)) return;
+    setUploadInvitationLoading(true);
+    setUploadInvitationStatus(null);
+    setError(null);
+    try {
+      const result = await realIssueIntakeUploadInvitation(selected.requestId);
+      const refreshed = await realGetIntakeRequestDetail(selected.requestId);
+      setSelected(refreshed.request);
+      setUploadInvitationStatus(
+        result.emailSent
+          ? `Upload invitation sent. It expires ${new Date(result.expiresAt).toLocaleString()}.`
+          : 'The upload session was created, but the invitation email could not be sent.'
+      );
+      await loadQueue();
+    } catch (caught) {
+      setError(errorMessage(caught));
+    } finally {
+      setUploadInvitationLoading(false);
+    }
+  }
+
   return (
     <div className="space-y-5">
       <form
@@ -239,6 +266,12 @@ export function IntakeOperationsClient() {
               <button key={action.value} disabled={actionLoading} onClick={() => void runAction(action.value)}
                 className="rounded-lg border border-gray-200 px-3 py-2 text-xs font-semibold text-phx-navy hover:bg-gray-50 disabled:opacity-50">{action.label}</button>
             ))}
+              {selected.status === 'under_review' && (
+                <button disabled={uploadInvitationLoading || actionLoading} onClick={() => void issueUploadInvitation()}
+                  className="rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy hover:opacity-90 disabled:opacity-50">
+                  {uploadInvitationLoading ? 'Sending invitation…' : 'Send upload invitation'}
+                </button>
+              )}
               {selected.status === 'accepted' && (
                 <button disabled={provisioningLoading || actionLoading} onClick={() => void provisionWorkspace()}
                   className="rounded-lg bg-phx-cyan px-3 py-2 text-xs font-semibold text-phx-navy hover:opacity-90 disabled:opacity-50">
@@ -246,6 +279,11 @@ export function IntakeOperationsClient() {
                 </button>
               )}
             </div>
+            {uploadInvitationStatus && (
+              <div role="status" className="rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
+                {uploadInvitationStatus}
+              </div>
+            )}
             {provisioningResult && (
               <div className="space-y-3 rounded-lg border border-green-200 bg-green-50 px-4 py-3 text-sm text-green-800">
                 <div role="status">Workspace {provisioningResult.outcome === 'created' ? 'created' : 'already provisioned'} successfully.

@@ -191,6 +191,12 @@ export type IntakeRequestStatus =
 export type IntakeRequestType = 'assessment' | 'demo' | 'general';
 export type IntakeOperatorAction = 'under_review' | 'reject' | 'quote' | 'accept' | 'close';
 
+export interface IntakeUploadInvitationResult {
+  status: 'upload_invited';
+  expiresAt: string;
+  emailSent: boolean;
+}
+
 export interface IntakeQueueItem {
   requestId: string;
   publicReference: string;

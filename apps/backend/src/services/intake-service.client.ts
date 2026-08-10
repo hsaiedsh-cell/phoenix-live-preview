@@ -133,6 +133,15 @@ const websiteActionResponseSchema = z
   })
   .strict();
 
+const websiteUploadInvitationResponseSchema = z
+  .object({
+    status: z.literal('upload_invited'),
+    expiresAt: z.string().datetime({ offset: true }),
+    emailSent: z.boolean(),
+    requestId: serviceRequestIdSchema,
+  })
+  .strict();
+
 const websiteErrorResponseSchema = z
   .object({
     error: z.string().min(1).max(500),
@@ -180,6 +189,12 @@ export interface IntakeActionData {
   status: IntakeRequestStatus;
 }
 
+export interface IntakeUploadInvitationData {
+  status: 'upload_invited';
+  expiresAt: string;
+  emailSent: boolean;
+}
+
 export type IntakeServiceResult<T> =
   | {
       ok: true;
@@ -216,6 +231,12 @@ export interface IntakeServiceClient {
     actorUserId: string,
     requestId: string
   ): Promise<IntakeServiceResult<IntakeActionData>>;
+
+  inviteUpload(
+    intakeRequestId: string,
+    actorUserId: string,
+    requestId: string
+  ): Promise<IntakeServiceResult<IntakeUploadInvitationData>>;
 }
 
 export interface CreateIntakeServiceClientOptions {
@@ -551,6 +572,32 @@ export function createIntakeServiceClient(
         ok: true,
         data: {
           status: result.data.status,
+        },
+      };
+    },
+
+    async inviteUpload(intakeRequestId, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const result = await execute({
+        path:
+          '/api/internal/operations/intake-requests/' +
+          encodeURIComponent(validatedRequestId) +
+          '/upload-invitation',
+        method: 'POST',
+        requestId,
+        actorUserId,
+        successSchema: websiteUploadInvitationResponseSchema,
+        allowedUpstreamStatuses: [404, 409],
+      });
+
+      if (!result.ok) return result;
+
+      return {
+        ok: true,
+        data: {
+          status: result.data.status,
+          expiresAt: result.data.expiresAt,
+          emailSent: result.data.emailSent,
         },
       };
     },

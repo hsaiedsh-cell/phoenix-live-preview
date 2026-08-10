@@ -122,6 +122,40 @@ export interface PlatformSuperAdminActor {
   platformRole: 'SuperAdmin';
 }
 
+export interface AuthenticatedPhoenixUser {
+  id: string;
+  email: string;
+  displayName: string;
+}
+
+/**
+ * Resolves any authenticated, database-backed Phoenix user without
+ * granting an operator role or assuming a workspace membership.
+ * Customer portal routes use this guard and enforce request ownership
+ * again inside the Website intake bounded context.
+ */
+export async function requireAuthenticatedPhoenixUser(
+  req: Request,
+  res: Response
+): Promise<AuthenticatedPhoenixUser | null> {
+  const resolution = await getActorResolver().resolveUserId(req);
+  if (!resolution.ok) {
+    writeAuthResolutionFailure(res, resolution);
+    return null;
+  }
+  if (!(await requireDatabase(res))) return null;
+  const user = await getUserById(resolution.userId);
+  if (!user) {
+    res.status(401).json(failure(
+      ApiErrorCodes.AUTH_REQUIRED,
+      'No Phoenix user was found for the authenticated identity.',
+      getRequestId(res)
+    ));
+    return null;
+  }
+  return { id: user.id, email: user.email, displayName: user.displayName };
+}
+
 /**
  * Resolves one authenticated Phoenix user and enforces the global
  * database-owned `SuperAdmin` platform role.

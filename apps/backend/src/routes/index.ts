@@ -23,6 +23,7 @@ import { intakeOperationsRouter } from './intake-operations';
 import { intakeProvisioningRouter } from './intake-provisioning';
 import { onboardingInvitationsRouter } from './onboarding-invitations';
 import { identityWorkspacesRouter } from './identity-workspaces';
+import { customerPortalRouter } from './customer-portal';
 
 export function registerRoutes(app: Express): void {
   // Foundation endpoints — active this sprint.
@@ -49,4 +50,5 @@ export function registerRoutes(app: Express): void {
   app.use('/api', intakeProvisioningRouter);
   app.use('/api', onboardingInvitationsRouter);
   app.use('/api', identityWorkspacesRouter);
+  app.use('/api', customerPortalRouter);
 }

@@ -72,3 +72,18 @@ export const IntakeQuoteBodySchema = z.object({
 export const SupportedIntakeActionSchema = z.enum([
   'under_review', 'reject', 'quote', 'accept', 'close',
 ]);
+
+export const CustomerQuoteParamsSchema = z.object({
+  requestId: z.string().uuid(),
+  quoteOfferId: z.string().uuid(),
+}).strict();
+
+export const CustomerQuoteDecisionBodySchema = z.discriminatedUnion('decision', [
+  z.object({ decision: z.literal('approved'), termsAcceptedVersion: z.string().trim().min(1).max(100) }).strict(),
+  z.object({ decision: z.literal('declined'), reason: z.string().trim().min(1).max(4000) }).strict(),
+  z.object({ decision: z.literal('changes_requested'), reason: z.string().trim().min(1).max(4000) }).strict(),
+]);
+
+export const CustomerQuoteMessageBodySchema = z.object({
+  message: z.string().trim().min(1).max(4000),
+}).strict();

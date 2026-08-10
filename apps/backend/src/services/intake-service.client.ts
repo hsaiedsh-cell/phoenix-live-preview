@@ -164,6 +164,58 @@ const websiteQuoteResponseSchema = z.object({
   requestId: serviceRequestIdSchema,
 }).strict();
 
+const customerRequestSummarySchema = z.object({
+  requestId: z.string().uuid(),
+  publicReference: z.string().min(1).max(100),
+  requestType: intakeRequestTypeSchema,
+  company: z.string().min(1).max(500),
+  status: intakeRequestStatusSchema,
+  createdAt: z.string().datetime({ offset: true }),
+  updatedAt: z.string().datetime({ offset: true }),
+}).strict();
+
+const customerQuoteOfferSchema = z.object({
+  quoteOfferId: z.string().uuid(), version: z.number().int().positive(),
+  priceAmount: z.number().positive(), currency: z.enum(['USD', 'AED']),
+  deliveryHours: z.number().int().min(1).max(720),
+  fileFormats: z.array(z.enum(['AI', 'SVG', 'JPEG', 'PNG', 'PDF', 'EPS'])).min(1).max(6),
+  revisionRounds: z.number().int().min(0).max(20), additionalRevisionPrice: z.number().nonnegative(),
+  termsSnapshot: z.string().min(1).max(10_000), sentAt: z.string().datetime({ offset: true }),
+}).strict();
+
+const customerQuoteDecisionSchema = z.object({
+  decisionId: z.string().uuid(), quoteOfferId: z.string().uuid(),
+  decision: z.enum(['approved', 'declined', 'changes_requested']),
+  reason: z.string().max(4000).nullable(), createdAt: z.string().datetime({ offset: true }),
+}).strict();
+
+const customerQuoteMessageSchema = z.object({
+  messageId: z.string().uuid(), quoteOfferId: z.string().uuid(),
+  authorType: z.enum(['customer', 'operator']), message: z.string().min(1).max(4000),
+  createdAt: z.string().datetime({ offset: true }),
+}).strict();
+
+const websiteCustomerListResponseSchema = z.object({
+  requests: z.array(customerRequestSummarySchema).max(200), requestId: serviceRequestIdSchema,
+}).strict();
+
+const websiteCustomerDetailResponseSchema = z.object({
+  request: customerRequestSummarySchema,
+  offers: z.array(customerQuoteOfferSchema).max(100),
+  decisions: z.array(customerQuoteDecisionSchema).max(500),
+  messages: z.array(customerQuoteMessageSchema).max(1000),
+  requestId: serviceRequestIdSchema,
+}).strict();
+
+const websiteCustomerDecisionResponseSchema = z.object({
+  decisionId: z.string().uuid(), decision: z.enum(['approved', 'declined', 'changes_requested']),
+  createdAt: z.string().datetime({ offset: true }), requestId: serviceRequestIdSchema,
+}).strict();
+
+const websiteCustomerMessageResponseSchema = z.object({
+  messageId: z.string().uuid(), createdAt: z.string().datetime({ offset: true }), requestId: serviceRequestIdSchema,
+}).strict();
+
 const websiteErrorResponseSchema = z
   .object({
     error: z.string().min(1).max(500),
@@ -233,6 +285,12 @@ export interface IntakeQuoteInput {
 
 export interface IntakeQuoteData { status: 'quoted'; emailSent: true }
 
+export type CustomerRequestSummary = z.infer<typeof customerRequestSummarySchema>;
+export type CustomerRequestDetail = Omit<z.infer<typeof websiteCustomerDetailResponseSchema>, 'requestId'>;
+export type CustomerQuoteDecisionInput =
+  | { decision: 'approved'; termsAcceptedVersion: string }
+  | { decision: 'declined' | 'changes_requested'; reason: string };
+
 export type IntakeServiceResult<T> =
   | {
       ok: true;
@@ -288,6 +346,11 @@ export interface IntakeServiceClient {
     actorUserId: string,
     requestId: string
   ): Promise<IntakeServiceResult<IntakeQuoteData>>;
+
+  customerList(actorUserId: string, requestId: string): Promise<IntakeServiceResult<{ requests: CustomerRequestSummary[] }>>;
+  customerDetail(intakeRequestId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
+  customerDecision(intakeRequestId: string, quoteOfferId: string, input: CustomerQuoteDecisionInput, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerDecisionResponseSchema>, 'requestId'>>>;
+  customerMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
 }
 
 export interface CreateIntakeServiceClientOptions {
@@ -688,6 +751,57 @@ export function createIntakeServiceClient(
       });
       if (!result.ok) return result;
       return { ok: true, data: { status: result.data.status, emailSent: result.data.emailSent } };
+    },
+
+    async customerList(actorUserId, requestId) {
+      const result = await execute({
+        path: '/api/internal/customer/intake-requests', method: 'GET', requestId,
+        actorUserId, successSchema: websiteCustomerListResponseSchema,
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: { requests: result.data.requests } };
+    },
+
+    async customerDetail(intakeRequestId, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const result = await execute({
+        path: '/api/internal/customer/intake-requests/' + encodeURIComponent(validatedRequestId),
+        method: 'GET', requestId, actorUserId,
+        successSchema: websiteCustomerDetailResponseSchema, allowedUpstreamStatuses: [404],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: {
+        request: result.data.request, offers: result.data.offers,
+        decisions: result.data.decisions, messages: result.data.messages,
+      } };
+    },
+
+    async customerDecision(intakeRequestId, quoteOfferId, input, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const validatedOfferId = z.string().uuid().parse(quoteOfferId);
+      const result = await execute({
+        path: '/api/internal/customer/intake-requests/' + encodeURIComponent(validatedRequestId) +
+          '/quotes/' + encodeURIComponent(validatedOfferId) + '/decisions',
+        method: 'POST', requestId, actorUserId, body: input,
+        successSchema: websiteCustomerDecisionResponseSchema, allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: {
+        decisionId: result.data.decisionId, decision: result.data.decision, createdAt: result.data.createdAt,
+      } };
+    },
+
+    async customerMessage(intakeRequestId, quoteOfferId, message, actorUserId, requestId) {
+      const validatedRequestId = z.string().uuid().parse(intakeRequestId);
+      const validatedOfferId = z.string().uuid().parse(quoteOfferId);
+      const result = await execute({
+        path: '/api/internal/customer/intake-requests/' + encodeURIComponent(validatedRequestId) +
+          '/quotes/' + encodeURIComponent(validatedOfferId) + '/messages',
+        method: 'POST', requestId, actorUserId, body: { message },
+        successSchema: websiteCustomerMessageResponseSchema, allowedUpstreamStatuses: [404, 409],
+      });
+      if (!result.ok) return result;
+      return { ok: true, data: { messageId: result.data.messageId, createdAt: result.data.createdAt } };
     },
   };
 }

@@ -6,6 +6,7 @@ import { buildQuoteEmail } from '@/lib/intake/adapters/email.adapter';
 import { applyOperatorAction } from '@/lib/intake/operator-actions.service';
 import { findById } from '@/lib/intake/repositories/intake-requests.repository';
 import { createQuoteOffer } from '@/lib/intake/repositories/customer-portal.repository';
+import { publicConfig } from '@/lib/intake/config';
 import {
   genericErrorResponse,
   getIntakeServiceActorUserId,
@@ -64,6 +65,7 @@ export async function POST(
     const email = buildQuoteEmail({
       publicReference: intakeRequest.public_reference,
       firstName: intakeRequest.first_name,
+      portalUrl: `${publicConfig.platformUrl.replace(/\/$/, '')}/customer/requests/${encodeURIComponent(intakeRequest.id)}`,
       ...quote.data,
     });
     email.to = intakeRequest.work_email_normalized;

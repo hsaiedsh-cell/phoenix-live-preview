@@ -185,11 +185,12 @@ export async function realSendOperatorCustomerMessage(
 
 export async function realTransitionIntakeFulfillment(
   requestId: string,
-  status: FulfillmentStatus
+  status: FulfillmentStatus,
+  paymentUrl?: string
 ): Promise<CustomerFulfillment & { emailSent?: boolean }> {
   return clientPost(
     `/api/operations/intake-requests/${encodeURIComponent(requestId)}/fulfillment`,
-    { status }
+    { status, ...(paymentUrl ? { paymentUrl } : {}) }
   );
 }
 export async function realSignPreviewProof(requestId:string,input:{filename:string;contentType:string;sizeBytes:number}){return clientPost<{previewProofId:string;uploadUrl:string;storageObjectKey:string}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/sign`,input);}

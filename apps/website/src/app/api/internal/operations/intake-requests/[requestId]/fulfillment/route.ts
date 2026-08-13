@@ -24,7 +24,16 @@ const bodySchema = z.object({
     'accepted', 'in_progress', 'preview_ready', 'payment_pending',
     'paid', 'final_files_delivered', 'cancelled',
   ]),
-}).strict();
+  paymentUrl: z.string().url().max(2048).optional(),
+}).strict().superRefine((body, context) => {
+  if (body.status === 'payment_pending' && !body.paymentUrl) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['paymentUrl'],
+      message: 'A payment URL is required when requesting payment.',
+    });
+  }
+});
 
 export async function POST(
   request: Request,
@@ -47,6 +56,7 @@ export async function POST(
       requestId: parsedRequestId.data,
       toStatus: parsedBody.data.status,
       operatorUserId: actorUserId,
+      paymentUrl: parsedBody.data.paymentUrl,
     });
     const intakeRequest = await findById(parsedRequestId.data);
     let emailSent = false;
@@ -58,7 +68,7 @@ export async function POST(
         status: fulfillment.status,
         dueAt: new Date(fulfillment.dueAt),
         portalUrl,
-        paymentUrl: 'https://www.paypal.com/ncp/links/DEN3ZUBMATKMU',
+        paymentUrl: fulfillment.paymentUrl ?? undefined,
       });
       email.to = intakeRequest.work_email_normalized;
       email.idempotencyKey = `fulfillment/${intakeRequest.id}/${fulfillment.status}/${fulfillment.updatedAt}`;

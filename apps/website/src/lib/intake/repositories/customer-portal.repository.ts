@@ -62,6 +62,7 @@ export interface FulfillmentRow {
   payment_pending_at: Date | null;
   paid_at: Date | null;
   final_files_delivered_at: Date | null;
+  payment_url: string | null;
   updated_by_actor_user_id: string | null;
   created_at: Date;
   updated_at: Date;
@@ -338,6 +339,7 @@ export async function transitionFulfillment(input: {
   requestId: string;
   toStatus: FulfillmentStatus;
   actorUserId: string;
+  paymentUrl?: string;
 }): Promise<FulfillmentRow> {
   return withIntakeTransaction(async (query) => {
     const rows = await query<FulfillmentRow>(
@@ -362,10 +364,16 @@ export async function transitionFulfillment(input: {
          status = $2,
          updated_by_actor_user_id = $3,
          updated_at = now()
+         ${input.toStatus === 'payment_pending' ? ', payment_url = $4' : ''}
          ${column ? `, ${column} = COALESCE(${column}, now())` : ''}
        WHERE request_id = $1
        RETURNING *`,
-      [input.requestId, input.toStatus, input.actorUserId]
+      [
+        input.requestId,
+        input.toStatus,
+        input.actorUserId,
+        ...(input.toStatus === 'payment_pending' ? [input.paymentUrl ?? null] : []),
+      ]
     );
     await query(
       `INSERT INTO public_intake_fulfillment_events (

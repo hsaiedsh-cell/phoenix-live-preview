@@ -154,6 +154,7 @@ function mapFulfillment(fulfillment: FulfillmentRow) {
     paymentPendingAt: fulfillment.payment_pending_at?.toISOString() ?? null,
     paidAt: fulfillment.paid_at?.toISOString() ?? null,
     finalFilesDeliveredAt: fulfillment.final_files_delivered_at?.toISOString() ?? null,
+    paymentUrl: fulfillment.payment_url,
     updatedAt: fulfillment.updated_at.toISOString(),
   };
 }
@@ -162,11 +163,13 @@ export async function advanceOperatorFulfillment(input: {
   requestId: string;
   toStatus: FulfillmentStatus;
   operatorUserId: string;
+  paymentUrl?: string;
 }) {
   const fulfillment = await transitionFulfillment({
     requestId: input.requestId,
     toStatus: input.toStatus,
     actorUserId: input.operatorUserId,
+    paymentUrl: input.paymentUrl,
   });
   return mapFulfillment(fulfillment);
 }

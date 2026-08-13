@@ -105,6 +105,7 @@ export function IntakeOperationsClient() {
   const [operatorMessageStatus, setOperatorMessageStatus] = useState<string | null>(null);
   const [fulfillmentLoading, setFulfillmentLoading] = useState(false);
   const [fulfillmentStatus, setFulfillmentStatus] = useState<string | null>(null);
+  const [paymentUrl, setPaymentUrl] = useState('https://pay.ziina.com/phoenixops/RNmUNhDjI?source=app');
   const [previewUploading,setPreviewUploading]=useState(false);
   const [previewStatus,setPreviewStatus]=useState<string|null>(null);
   const [finalDeliverableUploading,setFinalDeliverableUploading]=useState(false);
@@ -143,6 +144,7 @@ export function IntakeOperationsClient() {
       ]);
       setSelected(result.request);
       setPortalDetail(portal);
+      setPaymentUrl(portal.fulfillment?.paymentUrl || 'https://pay.ziina.com/phoenixops/RNmUNhDjI?source=app');
       setProvisioningResult(null);
       setInvitation(null);
       setUploadInvitationStatus(null);
@@ -209,7 +211,8 @@ export function IntakeOperationsClient() {
     setFulfillmentLoading(true);
     setError(null);
     try {
-      const result = await realTransitionIntakeFulfillment(selected.requestId, status);
+      if (status === 'payment_pending' && !paymentUrl.trim()) { setError('Add a payment link before requesting payment.'); return; }
+      const result = await realTransitionIntakeFulfillment(selected.requestId, status, status === 'payment_pending' ? paymentUrl.trim() : undefined);
       setPortalDetail(await realGetOperatorCustomerPortal(selected.requestId));
       setFulfillmentStatus(result.emailSent
         ? `Project moved to ${status.replaceAll('_', ' ')} and the customer was notified by email.`
@@ -446,6 +449,7 @@ export function IntakeOperationsClient() {
             {portalDetail?.fulfillment && <div className="rounded-lg border border-cyan-200 bg-cyan-50 p-3">
               <div className="flex items-start justify-between gap-3"><div><h3 className="text-xs font-semibold uppercase tracking-wider text-phx-navy">Project fulfillment</h3><p className="mt-1 text-sm font-bold capitalize text-phx-navy">{portalDetail.fulfillment.status.replaceAll('_', ' ')}</p></div><div className="text-right text-[11px] text-gray-600"><p>Due</p><p className="font-semibold">{new Date(portalDetail.fulfillment.dueAt).toLocaleString()}</p></div></div>
               <div className="mt-3 flex flex-wrap gap-2">{(FULFILLMENT_ACTIONS[portalDetail.fulfillment.status] ?? []).map((action) => {const finalBlocked=action.status==='final_files_delivered'&&portalDetail.finalDeliverables.length===0;return <button key={action.status} disabled={fulfillmentLoading||finalBlocked} title={finalBlocked?'Upload the final ZIP first.':undefined} onClick={() => void transitionProject(action.status)} className="rounded-lg bg-phx-navy px-3 py-2 text-xs font-semibold text-white disabled:opacity-50">{fulfillmentLoading ? 'Updating…' : action.label}</button>;})}</div>
+              {portalDetail.fulfillment.status === 'preview_ready' && <label className="mt-3 block text-xs font-semibold text-phx-navy">Payment link<input type="url" value={paymentUrl} onChange={(event) => setPaymentUrl(event.target.value)} placeholder="https://pay.ziina.com/..." className="mt-1 w-full rounded border border-cyan-300 bg-white px-2 py-2 font-normal" /></label>}
               {fulfillmentStatus && <p role="status" className="mt-2 text-xs text-green-800">{fulfillmentStatus}</p>}
               {portalDetail.fulfillmentEvents.length > 0 && <div className="mt-3 space-y-1 border-t border-cyan-200 pt-3">{portalDetail.fulfillmentEvents.map((event) => <p key={event.eventId} className="text-[11px] text-gray-600"><strong className="capitalize">{event.toStatus.replaceAll('_', ' ')}</strong> · {new Date(event.createdAt).toLocaleString()}</p>)}</div>}
               {['preview_ready','in_progress'].includes(portalDetail.fulfillment.status)&&<label className="mt-3 block rounded-lg border border-dashed border-cyan-300 bg-white p-3 text-xs font-semibold text-phx-navy">{previewUploading?'Uploading preview…':'Upload preview proof (PDF, PNG, JPEG)'}<input type="file" accept="application/pdf,image/png,image/jpeg" disabled={previewUploading} className="mt-2 block w-full text-xs" onChange={(e)=>{const file=e.target.files?.[0];if(file)void uploadPreview(file);}}/></label>}

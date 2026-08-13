@@ -331,6 +331,7 @@ export interface CustomerFulfillment {
   paymentPendingAt: string | null;
   paidAt: string | null;
   finalFilesDeliveredAt: string | null;
+  paymentUrl: string | null;
   updatedAt: string;
 }
 

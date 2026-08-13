@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { getStorageAdapter } from './adapters';
+import { publicConfig } from './config';
 import { intakeQuery, withIntakeTransaction } from './db';
 import { customerCanAccessRequest } from './repositories/customer-portal.repository';
 
@@ -29,7 +30,15 @@ export async function getFinalDeliverables(requestId:string,customerUserId?:stri
   if(customerUserId&&!(await customerCanAccessRequest(requestId,customerUserId)))return null;
   const rows=await intakeQuery<DeliverableRow>(`SELECT * FROM public_intake_final_deliverables WHERE request_id=$1 AND status='ready' ORDER BY created_at DESC`,[requestId]);
   const metadata=rows.map(row=>({finalDeliverableId:row.id,filename:row.original_filename,contentType:row.content_type,sizeBytes:Number(row.size_bytes),createdAt:row.created_at.toISOString()}));
-  if(customerUserId)return metadata;
+  // Keep the response compatible with backend deployments that still require
+  // a URL field while avoiding eager creation of expiring Supabase links.
+  // The platform never exposes this internal URL directly; its download button
+  // calls the authenticated on-demand download endpoint instead.
+  const customerMetadata=metadata.map(item=>({
+    ...item,
+    downloadUrl:`${publicConfig.siteUrl}/api/internal/customer/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/${encodeURIComponent(item.finalDeliverableId)}/download`,
+  }));
+  if(customerUserId)return customerMetadata;
   return Promise.all(rows.map(async(row,index)=>({...metadata[index],downloadUrl:await getStorageAdapter().createSignedDownloadUrl(row.storage_object_key,600)})));
 }
 

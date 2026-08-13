@@ -1,4 +1,5 @@
 import { Router, type Response } from 'express';
+import { z } from 'zod';
 import { requireAuthenticatedPhoenixUser } from '../auth/request-actor';
 import { ApiErrorCodes, failure, success } from '../contracts/api-response';
 import { asyncHandler, getRequestId } from '../lib/http';
@@ -47,6 +48,15 @@ customerPortalRouter.get('/customer/intake-requests/:requestId', asyncHandler(as
   const result = await client.customerDetail(params.data.requestId, actor.id, getRequestId(res));
   if (!result.ok) return writeCustomerServiceFailure(res, result);
   res.status(200).json(success(result.data, getRequestId(res)));
+}));
+
+customerPortalRouter.get('/customer/intake-requests/:requestId/final-deliverables/:finalDeliverableId/download',asyncHandler(async(req,res)=>{
+  const actor=await requireAuthenticatedPhoenixUser(req,res);if(!actor)return;
+  const params=z.object({requestId:z.string().uuid(),finalDeliverableId:z.string().uuid()}).strict().safeParse(req.params);
+  if(!params.success)return sendValidationError(res,formatZodIssues(params.error));
+  const result=await client.customerFinalDeliverableDownload(params.data.requestId,params.data.finalDeliverableId,actor.id,getRequestId(res));
+  if(!result.ok)return writeCustomerServiceFailure(res,result);
+  res.status(200).json(success(result.data,getRequestId(res)));
 }));
 
 customerPortalRouter.post('/customer/intake-requests/:requestId/quotes/:quoteOfferId/decisions', asyncHandler(async (req, res) => {

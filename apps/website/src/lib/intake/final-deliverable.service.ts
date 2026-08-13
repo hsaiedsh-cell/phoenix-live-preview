@@ -28,5 +28,16 @@ export async function completeFinalDeliverable(input:{requestId:string;finalDeli
 export async function getFinalDeliverables(requestId:string,customerUserId?:string){
   if(customerUserId&&!(await customerCanAccessRequest(requestId,customerUserId)))return null;
   const rows=await intakeQuery<DeliverableRow>(`SELECT * FROM public_intake_final_deliverables WHERE request_id=$1 AND status='ready' ORDER BY created_at DESC`,[requestId]);
-  return Promise.all(rows.map(async row=>({finalDeliverableId:row.id,filename:row.original_filename,contentType:row.content_type,sizeBytes:Number(row.size_bytes),createdAt:row.created_at.toISOString(),downloadUrl:await getStorageAdapter().createSignedDownloadUrl(row.storage_object_key,600)})));
+  const metadata=rows.map(row=>({finalDeliverableId:row.id,filename:row.original_filename,contentType:row.content_type,sizeBytes:Number(row.size_bytes),createdAt:row.created_at.toISOString()}));
+  if(customerUserId)return metadata;
+  return Promise.all(rows.map(async(row,index)=>({...metadata[index],downloadUrl:await getStorageAdapter().createSignedDownloadUrl(row.storage_object_key,600)})));
+}
+
+export async function getFinalDeliverableDownload(requestId:string,finalDeliverableId:string,customerUserId:string){
+  if(!(await customerCanAccessRequest(requestId,customerUserId)))return null;
+  const rows=await intakeQuery<DeliverableRow>(`SELECT * FROM public_intake_final_deliverables WHERE id=$1 AND request_id=$2 AND status='ready'`,[finalDeliverableId,requestId]);
+  const row=rows[0];
+  if(!row)return null;
+  const ttlSeconds=600;
+  return {downloadUrl:await getStorageAdapter().createSignedDownloadUrl(row.storage_object_key,ttlSeconds),expiresAt:new Date(Date.now()+ttlSeconds*1000).toISOString()};
 }

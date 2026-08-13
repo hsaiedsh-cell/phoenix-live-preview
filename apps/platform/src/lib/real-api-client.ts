@@ -309,7 +309,7 @@ export interface CustomerPortalRequestDetail {
   }>;
   previews:Array<{previewProofId:string;version:number;filename:string;contentType:string;sizeBytes:number;status:'ready'|'superseded';createdAt:string;downloadUrl:string}>;
   previewDecisions:Array<{decisionId:string;previewProofId:string;decision:'approved'|'revision_requested';reason:string|null;createdAt:string}>;
-  finalDeliverables:Array<{finalDeliverableId:string;filename:string;contentType:string;sizeBytes:number;createdAt:string;downloadUrl:string}>;
+  finalDeliverables:Array<{finalDeliverableId:string;filename:string;contentType:string;sizeBytes:number;createdAt:string;downloadUrl?:string}>;
 }
 
 export type FulfillmentStatus =

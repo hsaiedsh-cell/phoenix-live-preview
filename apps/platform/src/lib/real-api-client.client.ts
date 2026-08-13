@@ -160,6 +160,10 @@ export async function realGetIntakeFileDownload(
   );
 }
 
+export async function realGetCustomerFinalDeliverableDownload(requestId:string,finalDeliverableId:string):Promise<IntakeFileDownloadResult>{
+  return clientFetch(`/api/customer/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/${encodeURIComponent(finalDeliverableId)}/download`);
+}
+
 export async function realSendIntakeQuote(requestId: string, input: IntakeQuoteInput): Promise<IntakeQuoteResult> {
   return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/quote`, input);
 }

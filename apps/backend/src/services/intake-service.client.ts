@@ -196,7 +196,7 @@ const customerQuoteMessageSchema = z.object({
 }).strict();
 const previewProofSchema=z.object({previewProofId:z.string().uuid(),version:z.number().int().positive(),filename:z.string(),contentType:z.string(),sizeBytes:z.number().int().positive(),status:z.enum(['ready','superseded']),createdAt:z.string().datetime({offset:true}),downloadUrl:z.string().url()}).strict();
 const previewDecisionSchema=z.object({decisionId:z.string().uuid(),previewProofId:z.string().uuid(),decision:z.enum(['approved','revision_requested']),reason:z.string().nullable(),createdAt:z.string().datetime({offset:true})}).strict();
-const finalDeliverableSchema=z.object({finalDeliverableId:z.string().uuid(),filename:z.string(),contentType:z.string(),sizeBytes:z.number().int().positive(),createdAt:z.string().datetime({offset:true}),downloadUrl:z.string().url()}).strict();
+const finalDeliverableSchema=z.object({finalDeliverableId:z.string().uuid(),filename:z.string(),contentType:z.string(),sizeBytes:z.number().int().positive(),createdAt:z.string().datetime({offset:true}),downloadUrl:z.string().url().optional()}).strict();
 
 const fulfillmentStatusSchema = z.enum([
   'accepted', 'in_progress', 'preview_ready', 'payment_pending',
@@ -399,6 +399,7 @@ export interface IntakeServiceClient {
 
   customerList(actorUserId: string, requestId: string): Promise<IntakeServiceResult<{ requests: CustomerRequestSummary[] }>>;
   customerDetail(intakeRequestId: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
+  customerFinalDeliverableDownload(intakeRequestId:string,finalDeliverableId:string,actorUserId:string,requestId:string):Promise<IntakeServiceResult<IntakeFileDownloadData>>;
   customerDecision(intakeRequestId: string, quoteOfferId: string, input: CustomerQuoteDecisionInput, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerDecisionResponseSchema>, 'requestId'>>>;
   customerMessage(intakeRequestId: string, quoteOfferId: string, message: string, actorUserId: string, requestId: string): Promise<IntakeServiceResult<Omit<z.infer<typeof websiteCustomerMessageResponseSchema>, 'requestId'>>>;
   operatorPortalDetail(intakeRequestId: string, requestId: string): Promise<IntakeServiceResult<CustomerRequestDetail>>;
@@ -834,6 +835,14 @@ export function createIntakeServiceClient(
         decisions: result.data.decisions, messages: result.data.messages,
         fulfillment: result.data.fulfillment, fulfillmentEvents: result.data.fulfillmentEvents, previews:result.data.previews,previewDecisions:result.data.previewDecisions,finalDeliverables:result.data.finalDeliverables,
       } };
+    },
+
+    async customerFinalDeliverableDownload(intakeRequestId,finalDeliverableId,actorUserId,requestId){
+      const validatedRequestId=z.string().uuid().parse(intakeRequestId);
+      const validatedFileId=z.string().uuid().parse(finalDeliverableId);
+      const result=await execute({path:'/api/internal/customer/intake-requests/'+encodeURIComponent(validatedRequestId)+'/final-deliverables/'+encodeURIComponent(validatedFileId)+'/download',method:'GET',requestId,actorUserId,successSchema:websiteFileDownloadResponseSchema,allowedUpstreamStatuses:[404]});
+      if(!result.ok)return result;
+      return {ok:true,data:{downloadUrl:result.data.downloadUrl,expiresAt:result.data.expiresAt}};
     },
 
     async customerDecision(intakeRequestId, quoteOfferId, input, actorUserId, requestId) {

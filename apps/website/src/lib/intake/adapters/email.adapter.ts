@@ -163,20 +163,22 @@ export function buildQuoteEmail(input: {
   fileFormats: string[];
   revisionRounds: number;
   additionalRevisionPrice: number;
+  portalUrl: string;
 }): SendEmailInput {
   const safe = {
     reference: escapeHtml(input.publicReference),
     firstName: escapeHtml(input.firstName),
     currency: escapeHtml(input.currency),
     formats: escapeHtml(input.fileFormats.join(', ')),
+    portalUrl: escapeHtml(input.portalUrl),
   };
   const price = `${input.currency} ${input.priceAmount.toFixed(2)}`;
   const extraRevision = `${input.currency} ${input.additionalRevisionPrice.toFixed(2)}`;
   return {
     to: '',
     subject: `Phoenix quotation for ${input.publicReference} — ${price}`,
-    text: `Hi ${input.firstName},\n\nWe reviewed your files and prepared the following quotation for request ${input.publicReference}.\n\nPrice: ${price}\nDelivery: ${input.deliveryHours} hours after approval\nDeliverables: ${input.fileFormats.join(', ')}\nIncluded revisions: ${input.revisionRounds} rounds\nAdditional revisions: ${extraRevision} per round\n\nWorkflow:\n1. Reply to approve this quotation.\n2. Phoenix prepares a watermarked or reduced-resolution preview proof.\n3. After final proof approval, Phoenix sends a secure payment link.\n4. Editable and high-resolution final files are released after full payment.\n\nMajor redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing. By approving, you confirm authorization to reproduce the submitted artwork.\n\n— The Phoenix team`,
-    html: `<p>Hi ${safe.firstName},</p><p>We reviewed your files and prepared the following quotation for request <strong>${safe.reference}</strong>.</p><ul><li><strong>Price:</strong> ${safe.currency} ${input.priceAmount.toFixed(2)}</li><li><strong>Delivery:</strong> ${input.deliveryHours} hours after approval</li><li><strong>Deliverables:</strong> ${safe.formats}</li><li><strong>Included revisions:</strong> ${input.revisionRounds} rounds</li><li><strong>Additional revisions:</strong> ${safe.currency} ${input.additionalRevisionPrice.toFixed(2)} per round</li></ul><h3>Workflow</h3><ol><li>Reply to approve this quotation.</li><li>Phoenix prepares a watermarked or reduced-resolution preview proof.</li><li>After final proof approval, Phoenix sends a secure payment link.</li><li>Editable and high-resolution final files are released after full payment.</li></ol><p>Major redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing. By approving, you confirm authorization to reproduce the submitted artwork.</p><p>— The Phoenix team</p>`,
+    text: `Hi ${input.firstName},\n\nWe reviewed your files and prepared the following quotation for request ${input.publicReference}.\n\nPrice: ${price}\nDelivery: ${input.deliveryHours} hours after approval\nDeliverables: ${input.fileFormats.join(', ')}\nIncluded revisions: ${input.revisionRounds} rounds\nAdditional revisions: ${extraRevision} per round\n\nReview your quotation in the Phoenix Client Portal:\n${input.portalUrl}\n\nFrom the portal you can approve, request changes, decline, or negotiate with the Phoenix team.\n\nWorkflow:\n1. Review and respond to this quotation in the client portal.\n2. Phoenix prepares a watermarked or reduced-resolution preview proof.\n3. After final proof approval, Phoenix sends a secure payment link.\n4. Editable and high-resolution final files are released after full payment.\n\nMajor redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing. By approving, you confirm authorization to reproduce the submitted artwork.\n\n— The Phoenix team`,
+    html: `<p>Hi ${safe.firstName},</p><p>We reviewed your files and prepared the following quotation for request <strong>${safe.reference}</strong>.</p><ul><li><strong>Price:</strong> ${safe.currency} ${input.priceAmount.toFixed(2)}</li><li><strong>Delivery:</strong> ${input.deliveryHours} hours after approval</li><li><strong>Deliverables:</strong> ${safe.formats}</li><li><strong>Included revisions:</strong> ${input.revisionRounds} rounds</li><li><strong>Additional revisions:</strong> ${safe.currency} ${input.additionalRevisionPrice.toFixed(2)} per round</li></ul><p style="margin:24px 0"><a href="${safe.portalUrl}" style="display:inline-block;background:#0b1b2e;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px">Review quotation in Client Portal</a></p><p>In the portal you can approve, request changes, decline, or negotiate with the Phoenix team.</p><h3>Workflow</h3><ol><li>Review and respond to this quotation in the client portal.</li><li>Phoenix prepares a watermarked or reduced-resolution preview proof.</li><li>After final proof approval, Phoenix sends a secure payment link.</li><li>Editable and high-resolution final files are released after full payment.</li></ol><p>Major redesigns or new creative directions are quoted separately. Font matching is subject to availability and licensing. By approving, you confirm authorization to reproduce the submitted artwork.</p><p>— The Phoenix team</p>`,
     idempotencyKey: '',
   };
 }
@@ -208,6 +210,7 @@ export function buildFulfillmentUpdateEmail(input: {
   status: string;
   dueAt: Date;
   portalUrl: string;
+  paymentUrl?: string;
 }): SendEmailInput {
   const label = input.status.replaceAll('_', ' ');
   const safe = {
@@ -216,12 +219,17 @@ export function buildFulfillmentUpdateEmail(input: {
     label: escapeHtml(label),
     dueAt: escapeHtml(input.dueAt.toISOString()),
     portalUrl: escapeHtml(input.portalUrl),
+    paymentUrl: escapeHtml(input.paymentUrl || ''),
   };
+  const paymentText = input.status === 'payment_pending' && input.paymentUrl
+    ? `\n\nPay securely: ${input.paymentUrl}` : '';
+  const paymentHtml = input.status === 'payment_pending' && input.paymentUrl
+    ? `<p style="margin:24px 0"><a href="${safe.paymentUrl}" style="display:inline-block;background:#0b1b2e;color:#ffffff;text-decoration:none;font-weight:700;padding:12px 20px;border-radius:8px">Pay securely</a></p>` : '';
   return {
     to: '',
     subject: `Phoenix project update — ${input.publicReference}`,
-    text: `Hi ${input.firstName},\n\nYour Phoenix project ${input.publicReference} is now: ${label}.\n\nEstimated delivery: ${input.dueAt.toISOString()}\n\nTrack your project: ${input.portalUrl}\n\n— The Phoenix team`,
-    html: `<p>Hi ${safe.firstName},</p><p>Your Phoenix project <strong>${safe.reference}</strong> is now:</p><p style="font-size:18px;font-weight:700;text-transform:capitalize">${safe.label}</p><p><strong>Estimated delivery:</strong> ${safe.dueAt}</p><p><a href="${safe.portalUrl}">Track your project in the client portal</a></p><p>— The Phoenix team</p>`,
+    text: `Hi ${input.firstName},\n\nYour Phoenix project ${input.publicReference} is now: ${label}.\n\nEstimated delivery: ${input.dueAt.toISOString()}${paymentText}\n\nTrack your project: ${input.portalUrl}\n\n— The Phoenix team`,
+    html: `<p>Hi ${safe.firstName},</p><p>Your Phoenix project <strong>${safe.reference}</strong> is now:</p><p style="font-size:18px;font-weight:700;text-transform:capitalize">${safe.label}</p><p><strong>Estimated delivery:</strong> ${safe.dueAt}</p>${paymentHtml}<p><a href="${safe.portalUrl}">Track your project in the client portal</a></p><p>— The Phoenix team</p>`,
     idempotencyKey: '',
   };
 }

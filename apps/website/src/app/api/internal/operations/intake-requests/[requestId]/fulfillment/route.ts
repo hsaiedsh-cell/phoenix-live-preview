@@ -58,6 +58,7 @@ export async function POST(
         status: fulfillment.status,
         dueAt: new Date(fulfillment.dueAt),
         portalUrl,
+        paymentUrl: 'https://www.paypal.com/ncp/links/DEN3ZUBMATKMU',
       });
       email.to = intakeRequest.work_email_normalized;
       email.idempotencyKey = `fulfillment/${intakeRequest.id}/${fulfillment.status}/${fulfillment.updatedAt}`;

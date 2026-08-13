@@ -213,6 +213,7 @@ const fulfillmentSchema = z.object({
   paymentPendingAt: z.string().datetime({ offset: true }).nullable(),
   paidAt: z.string().datetime({ offset: true }).nullable(),
   finalFilesDeliveredAt: z.string().datetime({ offset: true }).nullable(),
+  paymentUrl: z.string().url().nullable(),
   updatedAt: z.string().datetime({ offset: true }),
 }).strict();
 
@@ -897,6 +898,7 @@ export function createIntakeServiceClient(
         paymentPendingAt: result.data.paymentPendingAt,
         paidAt: result.data.paidAt,
         finalFilesDeliveredAt: result.data.finalFilesDeliveredAt,
+        paymentUrl: result.data.paymentUrl,
         updatedAt: result.data.updatedAt,
         emailSent: result.data.emailSent,
       } };

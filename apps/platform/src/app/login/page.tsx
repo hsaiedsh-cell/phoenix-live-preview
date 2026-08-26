@@ -1,4 +1,6 @@
 import Link from 'next/link';
+import { headers } from 'next/headers';
+import { redirect } from 'next/navigation';
 import { AlphaNotice } from '@/components/AlphaNotice';
 import { LoginRoleSelector } from '@/components/LoginRoleSelector';
 import { IconLock } from '@/components/Icons';
@@ -38,6 +40,19 @@ export default async function LoginPage({
   const apiConfig = getPhoenixApiConfig();
   if (apiConfig.mode === 'production-auth' || apiConfig.mode === 'vercel-supabase-preview') {
     const redirectUrl = safeRedirectUrl((await searchParams).redirect_url);
+    const configuredSignInUrl = process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL;
+    if (configuredSignInUrl?.startsWith('https://')) {
+      const requestHeaders = await headers();
+      const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');
+      if (host && (host === 'app.phoenixops.ai' || host.endsWith('.vercel.app'))) {
+        const hostedSignInUrl = new URL(configuredSignInUrl);
+        hostedSignInUrl.searchParams.set(
+          'redirect_url',
+          new URL(redirectUrl ?? '/dashboard', `https://${host}`).toString()
+        );
+        redirect(hostedSignInUrl.toString());
+      }
+    }
     return (
       <div className="min-h-screen bg-phx-surface flex items-center justify-center px-4 py-12">
         <div className="w-full max-w-md">

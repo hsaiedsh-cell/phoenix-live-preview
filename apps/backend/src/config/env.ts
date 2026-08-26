@@ -86,6 +86,12 @@ export interface PhoenixOidcConfig {
   clockSkewSeconds: number;
 }
 
+export interface PhoenixIntakeServiceConfig {
+  baseUrl: string | undefined;
+  secret: string | undefined;
+  timeoutMs: number;
+}
+
 export interface PhoenixBackendEnv {
   nodeEnv: NodeEnv;
   port: number;
@@ -98,6 +104,8 @@ export interface PhoenixBackendEnv {
   authMode: PhoenixAuthMode;
   /** PHX-AUTH-002 — resolved OIDC/JWT config, regardless of whether authMode is 'oidc-jwt'. */
   oidc: PhoenixOidcConfig;
+  /** PHX-LAUNCH-002-R2 — optional Website intake service boundary. */
+  intakeService: PhoenixIntakeServiceConfig;
 }
 
 function readEnvVar(name: string): string | undefined {
@@ -124,6 +132,25 @@ function resolvePort(): number {
     return parsed;
   }
   return 4000;
+}
+
+function resolveIntakeServiceConfig(): PhoenixIntakeServiceConfig {
+  const rawTimeout = readEnvVar('PHOENIX_INTAKE_SERVICE_TIMEOUT_MS');
+  const parsedTimeout = rawTimeout ? Number.parseInt(rawTimeout, 10) : NaN;
+  const timeoutMs =
+    Number.isInteger(parsedTimeout) && parsedTimeout > 0 && parsedTimeout <= 30_000
+      ? parsedTimeout
+      : 5_000;
+
+  return {
+    baseUrl: readEnvVar('PHOENIX_INTAKE_SERVICE_BASE_URL'),
+    secret: readEnvVar('PHOENIX_INTAKE_SERVICE_SECRET'),
+    timeoutMs,
+  };
+}
+
+export function isIntakeServiceConfigured(config: PhoenixIntakeServiceConfig): boolean {
+  return Boolean(config.baseUrl && config.secret);
 }
 
 /**
@@ -217,6 +244,7 @@ export function getBackendEnv(): PhoenixBackendEnv {
   const databaseEnabled = readBooleanEnvVar('PHOENIX_ENABLE_DATABASE', false) && Boolean(databaseUrl);
   const nodeEnv = resolveNodeEnv();
   const oidc = resolveOidcConfig();
+  const intakeService = resolveIntakeServiceConfig();
 
   return {
     nodeEnv,
@@ -226,6 +254,7 @@ export function getBackendEnv(): PhoenixBackendEnv {
     databaseEnabled,
     authMode: resolveAuthMode(nodeEnv),
     oidc,
+    intakeService,
   };
 }
 

@@ -133,8 +133,10 @@ export async function resolvePreviewSessionState(): Promise<PreviewSessionState>
     const emailVerified = primary?.verification?.status === 'verified';
 
     return { mode: 'signed-in', clerkUserId: userId, email, emailVerified };
-  } catch (err) {
-    console.error('[preview-auth.server] Failed to resolve Clerk session:', err);
+  } catch {
+    // Clerk failures can contain request, identity, or token-adjacent data.
+    // Keep the operational signal while never forwarding the raw SDK error.
+    console.error('[preview-auth.server] Failed to resolve Clerk session.');
     return { mode: 'signed-out' };
   }
 }

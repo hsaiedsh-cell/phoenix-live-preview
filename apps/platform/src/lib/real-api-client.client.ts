@@ -39,6 +39,7 @@ import {
   backendErrorToRealApiError,
   RealApiConfigError,
   RealApiAuthRequiredError,
+  RealApiError,
   type BackendPaginatedResult,
   type BackendWorkspace,
   type BackendAssessment,
@@ -50,6 +51,22 @@ import {
   type BackendReport,
   type CreateReportRequestInput,
   type CreateReportRequestResult,
+  type IntakeQueueInput,
+  type IntakeQueueResult,
+  type IntakeRequestDetail,
+  type IntakeFileDownloadResult,
+  type IntakeQuoteInput,
+  type IntakeQuoteResult,
+  type IntakeOperatorAction,
+  type IntakeUploadInvitationResult,
+  type IntakeProvisioningInput,
+  type IntakeProvisioningResult,
+  type OnboardingInvitationIssueResult,
+  type OnboardingInvitationRevokeResult,
+  type CustomerPortalDecisionInput,
+  type CustomerPortalRequestDetail,
+  type CustomerFulfillment,
+  type FulfillmentStatus,
 } from './real-api-client';
 
 /**
@@ -94,6 +111,23 @@ async function resolveClientAuthHeaders(): Promise<Record<string, string>> {
   throw new RealApiConfigError(`Client-side real reads are not reachable in '${config.mode}' mode.`);
 }
 
+export async function realAcceptOnboardingInvitation(token: string): Promise<{ status: 'Accepted'; workspaceId: string }> {
+  const { baseUrl } = getPhoenixApiConfig();
+  if (!baseUrl) throw new RealApiConfigError('No backend URL configured for invitation acceptance.');
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/onboarding-invitations/accept`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ token }), credentials: 'omit', cache: 'no-store',
+    });
+  } catch {
+    throw new RealApiError(0, 'BACKEND_UNAVAILABLE', 'The invitation service is temporarily unavailable.');
+  }
+  const envelope = await response.json() as { ok: boolean; data?: { status: 'Accepted'; workspaceId: string }; error?: { code?: string; message?: string } };
+  if (!response.ok || !envelope.ok || !envelope.data) throw backendErrorToRealApiError(response.status, envelope.error);
+  return envelope.data;
+}
+
 async function clientFetch<T>(path: string): Promise<T> {
   const headers = await resolveClientAuthHeaders();
   return realFetch<T>(path, headers);
@@ -107,6 +141,134 @@ async function clientFetch<T>(path: string): Promise<T> {
 async function clientPost<T>(path: string, body: unknown): Promise<T> {
   const headers = await resolveClientAuthHeaders();
   return realPost<T>(path, headers, body);
+}
+
+export async function realQueryIntakeRequests(input: IntakeQueueInput): Promise<IntakeQueueResult> {
+  return clientPost('/api/operations/intake-requests/query', input);
+}
+
+export async function realGetIntakeRequestDetail(requestId: string): Promise<{ request: IntakeRequestDetail }> {
+  return clientFetch(`/api/operations/intake-requests/${encodeURIComponent(requestId)}`);
+}
+
+export async function realGetIntakeFileDownload(
+  requestId: string,
+  fileId: string
+): Promise<IntakeFileDownloadResult> {
+  return clientFetch(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/files/${encodeURIComponent(fileId)}/download`
+  );
+}
+
+export async function realGetCustomerFinalDeliverableDownload(requestId:string,finalDeliverableId:string):Promise<IntakeFileDownloadResult>{
+  return clientFetch(`/api/customer/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/${encodeURIComponent(finalDeliverableId)}/download`);
+}
+
+export async function realGetCustomerPreviewProofDownload(requestId:string,previewProofId:string):Promise<IntakeFileDownloadResult>{
+  return clientFetch(`/api/customer/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/${encodeURIComponent(previewProofId)}/download`);
+}
+
+export async function realSendIntakeQuote(requestId: string, input: IntakeQuoteInput): Promise<IntakeQuoteResult> {
+  return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/quote`, input);
+}
+
+export async function realGrantIntakeCustomerAccess(requestId: string, customerUserId: string): Promise<{ status: 'granted' }> {
+  return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/customer-access`, { customerUserId });
+}
+
+export async function realGetOperatorCustomerPortal(requestId: string): Promise<CustomerPortalRequestDetail> {
+  return clientFetch(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/customer-portal`);
+}
+
+export async function realSendOperatorCustomerMessage(
+  requestId: string,
+  quoteOfferId: string,
+  message: string
+): Promise<{ messageId: string; createdAt: string; emailSent?: boolean }> {
+  return clientPost(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/messages`,
+    { message }
+  );
+}
+
+export async function realTransitionIntakeFulfillment(
+  requestId: string,
+  status: FulfillmentStatus,
+  paymentUrl?: string
+): Promise<CustomerFulfillment & { emailSent?: boolean }> {
+  return clientPost(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/fulfillment`,
+    { status, ...(paymentUrl ? { paymentUrl } : {}) }
+  );
+}
+export async function realSignPreviewProof(requestId:string,input:{filename:string;contentType:string;sizeBytes:number}){return clientPost<{previewProofId:string;uploadUrl:string;storageObjectKey:string}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/sign`,input);}
+export async function realCompletePreviewProof(requestId:string,input:{previewProofId:string;storageObjectKey:string}){return clientPost<{status:'ready'}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/complete`,input);}
+export async function realSignFinalDeliverable(requestId:string,input:{filename:string;contentType:'application/zip'|'application/x-zip-compressed';sizeBytes:number}){return clientPost<{finalDeliverableId:string;uploadUrl:string;storageObjectKey:string}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/sign`,input);}
+export async function realCompleteFinalDeliverable(requestId:string,input:{finalDeliverableId:string;storageObjectKey:string}){return clientPost<{status:'ready'}>(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/final-deliverables/complete`,input);}
+export async function realDecidePreviewProof(requestId:string,previewProofId:string,input:{decision:'approved'}|{decision:'revision_requested';reason:string}){return clientPost<{decisionId:string;decision:string;createdAt:string}>(`/api/customer/intake-requests/${encodeURIComponent(requestId)}/preview-proofs/${encodeURIComponent(previewProofId)}/decisions`,input);}
+
+export async function realSubmitCustomerPortalDecision(
+  requestId: string,
+  quoteOfferId: string,
+  input: CustomerPortalDecisionInput
+): Promise<{ decisionId: string; decision: string; createdAt: string }> {
+  return clientPost(
+    `/api/customer/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/decisions`,
+    input
+  );
+}
+
+export async function realSendCustomerPortalMessage(
+  requestId: string,
+  quoteOfferId: string,
+  message: string
+): Promise<{ messageId: string; createdAt: string }> {
+  return clientPost(
+    `/api/customer/intake-requests/${encodeURIComponent(requestId)}/quotes/${encodeURIComponent(quoteOfferId)}/messages`,
+    { message }
+  );
+}
+
+export async function realRunIntakeAction(
+  requestId: string,
+  action: IntakeOperatorAction
+): Promise<{ status: string }> {
+  return clientPost(`/api/operations/intake-requests/${encodeURIComponent(requestId)}/actions`, { action });
+}
+
+export async function realIssueIntakeUploadInvitation(
+  requestId: string
+): Promise<IntakeUploadInvitationResult> {
+  return clientPost(
+    `/api/operations/intake-requests/${encodeURIComponent(requestId)}/upload-invitation`,
+    {}
+  );
+}
+
+export async function realProvisionIntakeWorkspace(
+  input: IntakeProvisioningInput
+): Promise<IntakeProvisioningResult> {
+  return clientPost('/api/operations/intake-workspace-handoffs', input);
+}
+
+export async function realIssueOnboardingInvitation(
+  membershipId: string,
+  expiresInHours = 72
+): Promise<OnboardingInvitationIssueResult> {
+  return clientPost('/api/operations/onboarding-invitations', { membershipId, expiresInHours });
+}
+
+export async function realRevokeOnboardingInvitation(
+  invitationId: string
+): Promise<OnboardingInvitationRevokeResult> {
+  return clientPost(`/api/operations/onboarding-invitations/${encodeURIComponent(invitationId)}/revoke`, {});
+}
+
+export async function realReissueOnboardingInvitation(
+  invitationId: string,
+  expiresInHours = 72
+): Promise<OnboardingInvitationIssueResult> {
+  return clientPost(`/api/operations/onboarding-invitations/${encodeURIComponent(invitationId)}/reissue`, { expiresInHours });
 }
 
 // ---------------------------------------------------------------------------

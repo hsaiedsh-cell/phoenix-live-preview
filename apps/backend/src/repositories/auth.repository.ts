@@ -24,10 +24,13 @@ import type { RequestActor, WorkspaceMembershipStatus, WorkspaceRole } from '../
 
 // ---- getUserById ----------------------------------------------------
 
+export type PlatformRole = 'SuperAdmin' | 'StandardUser' | 'ServiceAccount';
+
 export interface UserRecord {
   id: string;
   email: string;
   displayName: string;
+  platformRole: PlatformRole;
   deleted: boolean;
 }
 
@@ -35,6 +38,7 @@ interface UserRow {
   id: string;
   email: string;
   display_name: string;
+  platform_role: PlatformRole;
 }
 
 /**
@@ -48,7 +52,7 @@ interface UserRow {
 export async function getUserById(userId: string): Promise<UserRecord | null> {
   const pool = getDatabasePool();
   const result = await pool.query<UserRow>(
-    `SELECT id, email, display_name
+    `SELECT id, email, display_name, platform_role
      FROM users
      WHERE id = $1 AND deleted_at IS NULL
      LIMIT 1`,
@@ -56,7 +60,15 @@ export async function getUserById(userId: string): Promise<UserRecord | null> {
   );
 
   const row = result.rows[0];
-  return row ? { id: row.id, email: row.email, displayName: row.display_name, deleted: false } : null;
+  return row
+    ? {
+        id: row.id,
+        email: row.email,
+        displayName: row.display_name,
+        platformRole: row.platform_role,
+        deleted: false,
+      }
+    : null;
 }
 
 // ---- getWorkspaceMembership -------------------------------------------
@@ -66,6 +78,29 @@ export interface WorkspaceMembershipRecord {
   workspaceId: string;
   role: WorkspaceRole;
   status: WorkspaceMembershipStatus;
+}
+
+export interface IdentityWorkspaceRecord {
+  workspaceId: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  role: WorkspaceRole;
+}
+
+export async function listActiveWorkspacesForUser(userId: string): Promise<IdentityWorkspaceRecord[]> {
+  const result = await getDatabasePool().query<{
+    workspace_id: string; organization_id: string; name: string; slug: string; role: string;
+  }>(
+    `SELECT w.id AS workspace_id,w.organization_id,w.name,w.slug,wu.role
+     FROM workspace_users wu JOIN workspaces w ON w.id=wu.workspace_id
+     WHERE wu.user_id=$1 AND wu.status='Active' AND wu.deleted_at IS NULL AND w.deleted_at IS NULL
+     ORDER BY w.created_at ASC,w.id ASC`, [userId]
+  );
+  return result.rows.map((row) => ({
+    workspaceId: row.workspace_id, organizationId: row.organization_id,
+    name: row.name, slug: row.slug, role: row.role as WorkspaceRole,
+  }));
 }
 
 interface WorkspaceMembershipRow {

@@ -20,6 +20,7 @@
     "db:worker": "node dist/workers/report-generation-worker.js",
     "db:worker:once:dev": "tsx src/workers/report-worker-once.ts",
     "db:worker:once": "node dist/workers/report-worker-once.js",
+    "qa:r8:postgrest-security": "tsx scripts/qa/r8-postgrest-security.qa.ts",
     "auth:test-jwks": "node scripts/auth-test-jwks.mjs",
     "auth:test-token": "node scripts/auth-test-token.mjs"
   },

@@ -185,6 +185,193 @@ export class RealApiAuthRequiredError extends Error {
   }
 }
 
+export type IntakeRequestStatus =
+  | 'received' | 'under_review' | 'upload_invited' | 'files_received'
+  | 'quoted' | 'accepted' | 'rejected' | 'closed';
+export type IntakeRequestType = 'assessment' | 'demo' | 'general';
+export type IntakeOperatorAction = 'under_review' | 'reject' | 'quote' | 'accept' | 'close';
+
+export interface IntakeUploadInvitationResult {
+  status: 'upload_invited';
+  expiresAt: string;
+  emailSent: boolean;
+}
+
+export interface IntakeQueueItem {
+  requestId: string;
+  publicReference: string;
+  status: IntakeRequestStatus;
+  requestType: IntakeRequestType;
+  company: string;
+  createdAt: string;
+  updatedAt: string;
+  fileCount: number;
+  uploadSessionStatus: 'active' | 'used' | 'revoked' | 'expired' | null;
+}
+
+export interface IntakeQueueResult {
+  items: IntakeQueueItem[];
+  total: number;
+  nextCursor: string | null;
+}
+
+export interface IntakeQueueInput {
+  search?: string;
+  statuses?: IntakeRequestStatus[];
+  requestTypes?: IntakeRequestType[];
+  limit?: number;
+  cursor?: string;
+}
+
+export interface IntakeRequestDetail extends IntakeQueueItem {
+  firstName: string;
+  lastName: string;
+  workEmail: string;
+  role: string;
+  phone: string | null;
+  country: string | null;
+  estimatedTimeline: string | null;
+  message: string;
+  operatorActions: Array<{
+    eventId: string;
+    actorUserId: string;
+    from: IntakeRequestStatus;
+    to: IntakeRequestStatus;
+    createdAt: string;
+  }>;
+  files: Array<{
+    fileId: string;
+    originalFilename: string;
+    contentType: string;
+    sizeBytes: number;
+    scanStatus: 'pending_review' | 'cleared' | 'quarantined';
+    completedAt: string;
+  }>;
+}
+
+export interface IntakeFileDownloadResult {
+  downloadUrl: string;
+  expiresAt: string;
+}
+
+export interface IntakeQuoteInput {
+  priceAmount: number;
+  currency: 'USD' | 'AED';
+  deliveryHours: number;
+  fileFormats: Array<'AI' | 'SVG' | 'JPEG' | 'PNG' | 'PDF' | 'EPS'>;
+  revisionRounds: number;
+  additionalRevisionPrice: number;
+}
+
+export interface IntakeQuoteResult { status: 'quoted'; emailSent: true }
+
+export interface CustomerPortalRequestSummary {
+  requestId: string;
+  publicReference: string;
+  requestType: IntakeRequestType;
+  company: string;
+  status: IntakeRequestStatus;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface CustomerPortalQuoteOffer {
+  quoteOfferId: string;
+  version: number;
+  priceAmount: number;
+  currency: 'USD' | 'AED';
+  deliveryHours: number;
+  fileFormats: Array<'AI' | 'SVG' | 'JPEG' | 'PNG' | 'PDF' | 'EPS'>;
+  revisionRounds: number;
+  additionalRevisionPrice: number;
+  termsSnapshot: string;
+  sentAt: string;
+}
+
+export interface CustomerPortalRequestDetail {
+  request: CustomerPortalRequestSummary;
+  offers: CustomerPortalQuoteOffer[];
+  decisions: Array<{
+    decisionId: string; quoteOfferId: string;
+    decision: 'approved' | 'declined' | 'changes_requested';
+    reason: string | null; createdAt: string;
+  }>;
+  messages: Array<{
+    messageId: string; quoteOfferId: string; authorType: 'customer' | 'operator';
+    message: string; createdAt: string;
+  }>;
+  fulfillment: CustomerFulfillment | null;
+  fulfillmentEvents: Array<{
+    eventId: string;
+    fromStatus: FulfillmentStatus | null;
+    toStatus: FulfillmentStatus;
+    createdAt: string;
+  }>;
+  previews:Array<{previewProofId:string;version:number;filename:string;contentType:string;sizeBytes:number;status:'ready'|'superseded';createdAt:string;downloadUrl?:string}>;
+  previewDecisions:Array<{decisionId:string;previewProofId:string;decision:'approved'|'revision_requested';reason:string|null;createdAt:string}>;
+  finalDeliverables:Array<{finalDeliverableId:string;filename:string;contentType:string;sizeBytes:number;createdAt:string;downloadUrl?:string}>;
+}
+
+export type FulfillmentStatus =
+  | 'accepted'
+  | 'in_progress'
+  | 'preview_ready'
+  | 'payment_pending'
+  | 'paid'
+  | 'final_files_delivered'
+  | 'cancelled';
+
+export interface CustomerFulfillment {
+  quoteOfferId: string;
+  status: FulfillmentStatus;
+  approvedAt: string;
+  startedAt: string | null;
+  dueAt: string;
+  previewReadyAt: string | null;
+  paymentPendingAt: string | null;
+  paidAt: string | null;
+  finalFilesDeliveredAt: string | null;
+  paymentUrl: string | null;
+  updatedAt: string;
+}
+
+export type CustomerPortalDecisionInput =
+  | { decision: 'approved'; termsAcceptedVersion: string }
+  | { decision: 'declined' | 'changes_requested'; reason: string };
+
+export interface IntakeProvisioningInput {
+  sourceReference: string;
+  sourceStatus: 'accepted';
+  requestType: IntakeRequestType;
+  company: string;
+  firstName: string;
+  lastName: string;
+  workEmail: string;
+}
+
+export interface IntakeProvisioningResult {
+  outcome: 'created' | 'replayed';
+  handoffId: string;
+  organizationId: string;
+  workspaceId: string;
+  primaryUserId: string;
+  membershipId: string;
+  assessmentId: null;
+}
+
+export interface OnboardingInvitationIssueResult {
+  invitationId: string;
+  membershipId: string;
+  workspaceId: string;
+  expiresAt: string;
+  deliveryStatus: 'Sent' | 'Failed';
+}
+
+export interface OnboardingInvitationRevokeResult {
+  invitationId: string;
+  status: 'Revoked';
+}
+
 // ---------------------------------------------------------------------------
 // GET-only fetch helper shared by real-dev and production-auth.
 //

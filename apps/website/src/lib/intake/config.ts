@@ -29,6 +29,7 @@ function optionalServerEnv(name: string): string | undefined {
 
 export const publicConfig = {
   siteUrl: process.env.NEXT_PUBLIC_SITE_URL || 'https://phoenixops.ai',
+  platformUrl: process.env.NEXT_PUBLIC_PLATFORM_URL || 'https://phoenix-live-preview-platform-git-phx-launch-002-phoenixai.vercel.app',
   contactEmail: process.env.NEXT_PUBLIC_CONTACT_EMAIL || 'hello@phoenixops.ai',
   turnstileSiteKey: process.env.NEXT_PUBLIC_TURNSTILE_SITE_KEY || '',
 } as const;
@@ -57,6 +58,9 @@ export const serverConfig = {
   get intakeFromEmail(): string {
     return process.env.INTAKE_FROM_EMAIL || 'hello@phoenixops.ai';
   },
+  get intakeReplyToEmail(): string {
+    return process.env.INTAKE_REPLY_TO_EMAIL || 'hello@phoenixops.ai';
+  },
   get intakeInternalToEmail(): string {
     return process.env.INTAKE_INTERNAL_TO_EMAIL || 'hello@phoenixops.ai';
   },
@@ -71,6 +75,14 @@ export const serverConfig = {
   },
   get sentryDsn(): string | undefined {
     return optionalServerEnv('SENTRY_DSN');
+  },
+  // Dedicated Backend-to-Website service credential for
+  // PHX-LAUNCH-002-R2 internal operations routes. It is optional at
+  // module-load time so builds and unrelated public routes do not
+  // require a deployed secret; service authentication fails closed
+  // whenever it is absent.
+  get intakeServiceSecret(): string | undefined {
+    return optionalServerEnv('INTAKE_SERVICE_SECRET')?.trim() || undefined;
   },
   // Shared secret required on the two internal-only routes
   // (/api/intake/:id/finalize and /api/intake/:id/upload-session).

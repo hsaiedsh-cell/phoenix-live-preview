@@ -259,6 +259,14 @@ export class OidcJwtActorResolver implements ActorResolver {
 
     const verification = await verifyBearerToken(token, oidc);
     if (!verification.ok) {
+      // Coarse diagnostics only: never log the token, claims, provider
+      // payload, identity fields, or verifier detail. This category is safe
+      // for hosted auth-failure monitoring and is actionable during key/
+      // issuer/audience configuration checks.
+      // eslint-disable-next-line no-console
+      console.warn('[phoenix-backend] Bearer token verification failed', {
+        reason: verification.reason,
+      });
       // Every verification failure (bad signature, wrong issuer/
       // audience, expired, disallowed algorithm, malformed, missing/
       // unverified email) maps to the same 401 AUTH_INVALID — the

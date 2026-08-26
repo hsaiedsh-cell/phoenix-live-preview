@@ -269,6 +269,58 @@ export async function listFilesForSession(uploadSessionId: string): Promise<Inta
   );
 }
 
+export interface OperatorIntakeFile {
+  fileId: string;
+  originalFilename: string;
+  contentType: string;
+  sizeBytes: number;
+  scanStatus: 'pending_review' | 'cleared' | 'quarantined';
+  completedAt: Date;
+}
+
+/** Safe file metadata for the authenticated operator detail view. */
+export async function listCompletedFilesForRequest(requestId: string): Promise<OperatorIntakeFile[]> {
+  const rows = await intakeQuery<{
+    id: string;
+    original_filename: string;
+    verified_content_type: string | null;
+    declared_content_type: string;
+    verified_size_bytes: number | null;
+    declared_size_bytes: number;
+    scan_status: OperatorIntakeFile['scanStatus'];
+    completed_at: Date;
+  }>(
+    `SELECT id, original_filename, verified_content_type, declared_content_type,
+            verified_size_bytes, declared_size_bytes, scan_status, completed_at
+     FROM public_intake_files
+     WHERE request_id = $1 AND reservation_status = 'completed' AND completed_at IS NOT NULL
+     ORDER BY created_at ASC`,
+    [requestId]
+  );
+
+  return rows.map((row) => ({
+    fileId: row.id,
+    originalFilename: row.original_filename,
+    contentType: row.verified_content_type ?? row.declared_content_type,
+    sizeBytes: row.verified_size_bytes ?? row.declared_size_bytes,
+    scanStatus: row.scan_status,
+    completedAt: row.completed_at,
+  }));
+}
+
+export async function findCompletedFileForOperator(
+  requestId: string,
+  fileId: string
+): Promise<IntakeFileRow | null> {
+  const rows = await intakeQuery<IntakeFileRow>(
+    `SELECT * FROM public_intake_files
+     WHERE id = $1 AND request_id = $2 AND reservation_status = 'completed'
+     LIMIT 1`,
+    [fileId, requestId]
+  );
+  return rows[0] ?? null;
+}
+
 /**
  * R4 (§1): the authoritative-state summary GET /api/upload/:token
  * returns. Deliberately narrow -- callers must never widen this to

@@ -77,6 +77,9 @@ export const ApiErrorCodes = {
   AUTH_INVALID: 'AUTH_INVALID',
   AUTH_NOT_CONFIGURED: 'AUTH_NOT_CONFIGURED',
   AUTH_NOT_IMPLEMENTED: 'AUTH_NOT_IMPLEMENTED',
+  // PHX-LAUNCH-002-R2 — sanitized Website intake-service failures.
+  INTAKE_SERVICE_UNAVAILABLE: 'INTAKE_SERVICE_UNAVAILABLE',
+  INTAKE_SERVICE_ERROR: 'INTAKE_SERVICE_ERROR',
 } as const;
 
 export function success<T>(data: T, requestId: string): ApiSuccess<T> {

@@ -62,6 +62,10 @@ export function ClerkProviderShell({ children }: { children: React.ReactNode }) 
   return (
     <ClerkProvider
       publishableKey={config.clerkPublishableKey}
+      clerkJSUrl={
+        process.env.NEXT_PUBLIC_CLERK_JS_URL ||
+        'https://cdn.jsdelivr.net/npm/@clerk/clerk-js@5.127.2/dist/clerk.browser.js'
+      }
       signInUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL || '/login'}
       signUpUrl={process.env.NEXT_PUBLIC_CLERK_SIGN_UP_URL || '/login'}
       afterSignInUrl={process.env.NEXT_PUBLIC_CLERK_AFTER_SIGN_IN_URL || '/dashboard'}

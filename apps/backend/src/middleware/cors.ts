@@ -10,12 +10,14 @@
 //
 // SECURITY CONTRACT:
 //   - No wildcard ('*') origin, ever, under any configuration.
-//   - The allowlist is exactly the set of origins in
-//     PHOENIX_ALLOWED_ORIGINS (comma-separated). Nothing else is ever
-//     allowed, in any NODE_ENV.
-//   - If PHOENIX_ALLOWED_ORIGINS is unset, this middleware sets no CORS
-//     headers for any origin — it never falls back to "allow
-//     everything". Hosted/private-preview readiness should treat an
+//   - The allowlist includes PHOENIX_ALLOWED_ORIGINS (comma-separated)
+//     plus HTTPS preview hosts matching this Phoenix Platform project
+//     and the phoenixai Vercel scope. Arbitrary vercel.app origins are
+//     never accepted.
+//   - If PHOENIX_ALLOWED_ORIGINS is unset, readiness still reports the
+//     explicit list as unconfigured; only the narrowly matched Phoenix
+//     Platform preview hosts may receive CORS headers. It never falls
+//     back to "allow everything". Readiness should treat an
 //     empty allowlist as a warning/fail condition (see readiness.ts's
 //     cors.status field), not something this middleware compensates for.
 //   - A disallowed Origin never receives Access-Control-Allow-Origin,
@@ -80,7 +82,21 @@ export function getProductionCorsConfig(): ProductionCorsConfig {
 }
 
 function isAllowedOrigin(origin: string | undefined, config: ProductionCorsConfig): origin is string {
-  return typeof origin === 'string' && config.allowedOrigins.includes(origin);
+  if (typeof origin !== 'string') return false;
+  if (config.allowedOrigins.includes(origin)) return true;
+
+  // Every Vercel Preview redeployment receives a new immutable hostname.
+  // Trust only Phoenix Platform preview hosts owned by the phoenixai scope;
+  // this does not widen access to arbitrary vercel.app deployments.
+  try {
+    const url = new URL(origin);
+    return (
+      url.protocol === 'https:' &&
+      /^phoenix-live-preview-platform-[a-z0-9]+-phoenixai\.vercel\.app$/.test(url.hostname)
+    );
+  } catch {
+    return false;
+  }
 }
 
 /**

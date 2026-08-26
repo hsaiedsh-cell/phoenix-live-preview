@@ -40,6 +40,8 @@ import {
   type BackendEvidenceItem,
   type BackendScore,
   type BackendReport,
+  type CustomerPortalRequestSummary,
+  type CustomerPortalRequestDetail,
 } from './real-api-client';
 
 /**
@@ -115,6 +117,18 @@ async function serverFetch<T>(path: string): Promise<T> {
 
 export async function realGetWorkspace(workspaceId: string): Promise<BackendWorkspace> {
   return serverFetch<BackendWorkspace>(`/api/workspaces/${encodeURIComponent(workspaceId)}`);
+}
+
+export interface IdentityWorkspace {
+  workspaceId: string;
+  organizationId: string;
+  name: string;
+  slug: string;
+  role: string;
+}
+
+export async function realGetMyWorkspaces(): Promise<{ items: IdentityWorkspace[]; total: number }> {
+  return serverFetch('/api/me/workspaces');
 }
 
 export async function realGetAssessments(
@@ -194,4 +208,12 @@ export async function realGetReports(workspaceId: string): Promise<BackendPagina
 /** GET /api/reports/:reportId. */
 export async function realGetReportDetail(reportId: string): Promise<BackendReport> {
   return serverFetch<BackendReport>(`/api/reports/${encodeURIComponent(reportId)}`);
+}
+
+export async function realGetCustomerPortalRequests(): Promise<{ requests: CustomerPortalRequestSummary[] }> {
+  return serverFetch('/api/customer/intake-requests');
+}
+
+export async function realGetCustomerPortalRequest(requestId: string): Promise<CustomerPortalRequestDetail> {
+  return serverFetch(`/api/customer/intake-requests/${encodeURIComponent(requestId)}`);
 }

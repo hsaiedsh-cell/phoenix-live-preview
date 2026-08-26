@@ -1,23 +1,31 @@
 # Phoenix Backend — Database Schema Baseline
 
-**Task ID:** PHX-BACKEND-001
-**Status:** Scaffold only. No database is connected, and this document
-describes a target PostgreSQL schema — nothing here is executed by the
-backend at boot or at runtime this sprint.
-**Source of truth:** This baseline is a direct, backend-facing translation
-of `docs/platform/DATABASE_SCHEMA_PHX_PLATFORM_002.md` (PHX-PLATFORM-002),
-cross-checked against `packages/core/src/contracts/*.ts` for field names
-and enum values. It does not introduce any table, column, or relationship
-that document does not already define. Where this document adds detail
-(purpose, retention, audit notes) beyond the PHX-PLATFORM-002 draft, that
-detail is additive documentation only — the column list and types are
-unchanged.
+**Task ID:** PHX-BACKEND-001 / PHX-LAUNCH-002-R1
+**Status:** Executable PostgreSQL schema baseline. Migrations `0001`
+through `0007` are applied explicitly through the Backend migration
+runner; they are not executed automatically at application boot.
+Migration `0007` was validated on an isolated PostgreSQL 16 database
+with migration replay, constraint, immutability, foreign-key, and
+concurrent-claim QA.
+**Source of truth:** The original entity model remains derived from
+`docs/platform/DATABASE_SCHEMA_PHX_PLATFORM_002.md` and is
+cross-checked against `packages/core/src/contracts/*.ts`. The additive
+`intake_workspace_handoffs` ledger is governed by
+`docs/launch/PHX_LAUNCH_002_R1_DATA_MODEL_CONTRACT.md` and implemented
+by `apps/backend/db/migrations/0007_intake_workspace_handoffs.sql`.
+**Environment boundary:** The migration evidence recorded here is local
+QA evidence only. It does not provision, authorize, or configure a
+hosted Production database.
 
 **Conventions (carried over from PHX-PLATFORM-002):**
 - All primary keys: `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`.
 - All tables: `created_at TIMESTAMPTZ NOT NULL DEFAULT now()`, `updated_at TIMESTAMPTZ NOT NULL DEFAULT now()`.
 - Soft-deletable tables additionally have `deleted_at TIMESTAMPTZ NULL`.
-- `audit_records` is append-only — no `deleted_at`, no `UPDATE`/`DELETE` grants.
+- `audit_records` is append-only — no `deleted_at`, no
+  `UPDATE`/`DELETE` grants.
+- `intake_workspace_handoffs` has no `deleted_at`; every row starts as
+  `Processing`, permits one atomic transition to `Completed`, and is
+  never deletable.
 - Foreign keys default to `ON DELETE RESTRICT`; workspace-scoped children use `ON DELETE CASCADE` only where a full workspace teardown is an intentional, rare admin operation (noted per table).
 
 ---
@@ -516,9 +524,10 @@ history.
 
 **Purpose:** The compliance-grade, append-only audit trail. Every `U`/`D`
 action documented in `PERMISSIONS_MODEL_PHX_PLATFORM_002.md` is expected
-to write exactly one row here once real write endpoints exist. **This
-backend foundation sprint does not write to this table** — no business
-logic is implemented yet.
+to write exactly one row here once real write endpoints exist. The
+current runtime still does not write to this table. The R1 contract
+requires the future R4 provisioning transaction to append one
+workspace-scoped record, but R1 introduces no runtime provisioning code.
 
 **Key fields:** `id`, `workspace_id`, `created_at`, `actor_user_id`
 (nullable — e.g. system-initiated actions), `action` (e.g.
@@ -533,12 +542,10 @@ tables which cascade) and optionally `users`.
 entity_id)`, `(actor_user_id)`.
 
 **Audit considerations:** This table **has no `deleted_at` column** and
-is never soft- or hard-deleted. At the database level, `UPDATE`/`DELETE`
-grants should be revoked from the application role
-(`REVOKE UPDATE, DELETE ON audit_records FROM app_role;`) with a
-row-level `BEFORE UPDATE/DELETE` trigger as defense in depth — captured
-as a TODO in the migration file, not executed this sprint (no database
-connection exists to run it against).
+is never soft- or hard-deleted. Revoking `UPDATE`/`DELETE` privileges
+from the application role and adding a row-level database trigger remain
+future defense-in-depth work. R1 does not alter `audit_records`; its
+immutability trigger applies only to `intake_workspace_handoffs`.
 
 **Deletion/retention notes:** Append-only, permanent. Read access is
 restricted to `Auditor`, `Admin`, `Owner` per the Permissions Model
@@ -546,10 +553,59 @@ restricted to `Auditor`, `Admin`, `Owner` per the Permissions Model
 
 ---
 
+## intake_workspace_handoffs
+
+**Purpose:** Backend-owned durable ledger for the controlled conversion
+of one accepted public-intake request into Phoenix tenant records. It
+provides the source idempotency boundary, records the provisioning
+result, and preserves permanent completion evidence.
+
+The source request remains in the Website database. There is no
+cross-database foreign key, direct Backend read of Website intake
+tables, or distributed transaction.
+
+**Key fields:** `id`, `source_system`, `source_reference`,
+`source_request_type`, `source_payload_fingerprint`, `status`,
+`organization_id`, `workspace_id`, `primary_user_id`, `membership_id`,
+`assessment_id`, `created_by_user_id`, `completed_at`, `created_at`,
+`updated_at`.
+
+**Relationships:** References `organizations`, `workspaces`, `users`,
+`workspace_users`, and optionally `assessments`. All ledger foreign keys
+use `ON DELETE RESTRICT`. The initial handoff requires
+`assessment_id = NULL`; Assessment creation remains deferred until a real
+Asset and Asset Version exist.
+
+**Indexes:** Unique on `(source_system, source_reference)`. Additional
+indexes on `status`, `workspace_id`, `primary_user_id`, and
+`created_at`.
+
+**State and immutability:** Every row must be inserted as `Processing`
+with all target identifiers and `completed_at` null. One atomic
+`Processing` to `Completed` update must set the required Organization,
+Workspace, primary User, Membership, and completion timestamp.
+
+The database trigger rejects direct `Completed` insertion, deletion of
+any row, mutation of source identity fields, updates that do not perform
+the approved transition, and every update after completion.
+
+**Audit considerations:** The future provisioning service must append one
+`workspace.provisioned_from_intake` audit record in the same transaction
+before completing the ledger. Audit context is compact JSON serialized
+into the existing `audit_records.context` text column. Customer names,
+email, company, message, consent, upload, IP, and file metadata are not
+stored in the ledger.
+
+**Deletion/retention notes:** No `deleted_at` column. Processing and
+Completed rows are non-deletable. Completed rows are permanent and
+read-only.
+
+---
 ## Entity Relationship Summary
 
-_(Unchanged from `DATABASE_SCHEMA_PHX_PLATFORM_002.md` — reproduced here
-for convenience.)_
+_The original PHX-PLATFORM-002 relationships remain unchanged. The
+PHX-LAUNCH-002-R1 handoff ledger is appended below as an additive
+Backend-owned entity._
 
 ```
 organizations ──< departments
@@ -567,19 +623,29 @@ workspaces ──< activity_logs
 workspaces ──< notifications >── users
 workspaces ──< integrations
 workspaces ──< audit_records
+intake_workspace_handoffs >── organizations / workspaces
+intake_workspace_handoffs >── users / workspace_users
+intake_workspace_handoffs >── assessments (nullable and deferred)
 ```
 
 ---
 
 ## What this baseline deliberately does NOT do
 
-- Does not connect to any database.
-- Does not implement or invoke ORM models — see
-  `apps/backend/db/README.md` for why an ORM was not installed this
-  sprint.
-- Does not implement row-level security, the `audit_records`
-  revoke/trigger defense-in-depth described above, or any migration
-  runner configuration.
-- Does not change any table, column, type, or relationship from
-  `DATABASE_SCHEMA_PHX_PLATFORM_002.md` — this is a faithful backend-facing
-  restatement plus additive documentation only.
+- Does not provision or configure a hosted Production database.
+- Does not run migrations automatically at application boot.
+- Does not implement the intake provisioning endpoint, operator queue,
+  operator interface, invitation lifecycle, or customer self-service
+  registration.
+- Does not create a cross-database foreign key or distributed transaction
+  between the Website intake database and the Backend database.
+- Does not create an Assessment, placeholder Asset, placeholder Asset
+  Version, authentication identity, passport, or certification during
+  the initial handoff.
+- Does not alter existing Organization, Workspace, User, Membership,
+  Assessment, PBRS, report, passport, certification, or audit-record
+  columns and constraints.
+- Does not implement row-level security or the separate
+  `audit_records` revoke/trigger defense-in-depth work.
+- Does not introduce an ORM; migrations remain ordered raw SQL executed
+  explicitly by the existing Backend migration runner.

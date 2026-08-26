@@ -19,6 +19,7 @@ const NAV_ITEMS = [
   { label: 'PBRS Passports', href: '/passports', icon: IconShieldBadge },
   { label: 'Certifications', href: '/certifications', icon: IconAward },
   { label: 'Reports', href: '/reports', icon: IconReport },
+  { label: 'Intake Operations', href: '/operations/intake-requests', icon: IconClipboard },
   { label: 'Settings', href: '/settings', icon: IconSettings },
 ] as const;
 

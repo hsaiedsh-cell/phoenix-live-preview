@@ -1,0 +1,7 @@
+import { NextResponse } from 'next/server';
+import { z } from 'zod';
+import { signFinalDeliverable } from '@/lib/intake/final-deliverable.service';
+import { getIntakeServiceActorUserId,getIntakeServiceRequestId,intakeServiceUnauthorizedResponse,isValidIntakeServiceRequest,readBoundedJsonBody,requireJsonContentType } from '@/lib/intake/http';
+export const runtime='nodejs';export const dynamic='force-dynamic';
+const bodySchema=z.object({filename:z.string().trim().min(1).max(255),contentType:z.enum(['application/zip','application/x-zip-compressed']),sizeBytes:z.number().int().min(1).max(50*1024*1024)}).strict();
+export async function POST(request:Request,{params}:{params:Promise<{requestId:string}>}){const correlationId=getIntakeServiceRequestId(request);if(!isValidIntakeServiceRequest(request))return intakeServiceUnauthorizedResponse(correlationId);const actorUserId=getIntakeServiceActorUserId(request);const requestId=z.string().uuid().safeParse((await params).requestId);const body=await readBoundedJsonBody(request);const parsed=body.ok?bodySchema.safeParse(body.body):null;if(!actorUserId||!requestId.success||!parsed?.success||!requireJsonContentType(request))return NextResponse.json({error:'Invalid final delivery upload.',requestId:correlationId},{status:400});try{return NextResponse.json({...await signFinalDeliverable({...parsed.data,requestId:requestId.data,actorUserId}),requestId:correlationId});}catch{return NextResponse.json({error:'Final delivery upload is not available.',requestId:correlationId},{status:409});}}

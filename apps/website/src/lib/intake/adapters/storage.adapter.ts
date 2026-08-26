@@ -52,6 +52,8 @@ export interface DeleteObjectResult {
 export interface StorageAdapter {
   /** Creates a one-time signed upload URL scoped to exactly one object key. */
   createSignedUploadUrl(objectKey: string): Promise<SignedUploadUrl>;
+  /** Creates a short-lived read URL for one exact private object. */
+  createSignedDownloadUrl(objectKey: string, expiresInSeconds: number): Promise<string>;
   /**
    * Verifies the object actually exists in the private bucket and
    * returns the provider-recorded size and Content-Type metadata, or
@@ -85,6 +87,13 @@ export function createLiveSupabaseStorageAdapter(): StorageAdapter {
         throw new Error('storage_signed_url_failed');
       }
       return { uploadUrl: data.signedUrl, storageObjectKey: objectKey, token: data.token };
+    },
+    async createSignedDownloadUrl(objectKey: string, expiresInSeconds: number): Promise<string> {
+      const { data, error } = await client.storage.from(bucket).createSignedUrl(objectKey, expiresInSeconds, {
+        download: true,
+      });
+      if (error || !data?.signedUrl) throw new Error('storage_download_signing_failed');
+      return data.signedUrl;
     },
     async verifyObjectExists(objectKey: string): Promise<VerifiedObjectMetadata | null> {
       const lastSlash = objectKey.lastIndexOf('/');
@@ -147,6 +156,9 @@ export function createFakeStorageAdapter(): StorageAdapter & {
         storageObjectKey: objectKey,
         token: fakeToken,
       };
+    },
+    async createSignedDownloadUrl(objectKey: string, expiresInSeconds: number): Promise<string> {
+      return `https://fake-storage.test/download/${objectKey}?expires=${expiresInSeconds}`;
     },
     async verifyObjectExists(objectKey: string) {
       // R7: tracked so QA can prove an idempotent completion replay

@@ -158,14 +158,25 @@ function notWiredResult<T>(mode: PlatformDataMode): LiveResult<T> {
  * api-config.ts's `devWorkspaceId` / `productionWorkspaceId` doc
  * comments for why each mode needs its own explicit value.
  */
-function resolveLiveWorkspaceId(): { workspaceId: string | null; reason?: string } {
+async function resolveLiveWorkspaceId(): Promise<{ workspaceId: string | null; reason?: string; error?: unknown }> {
   const config = getPhoenixApiConfig();
   if (config.mode === 'real-dev') {
     return config.devWorkspaceId
       ? { workspaceId: config.devWorkspaceId }
       : { workspaceId: null, reason: 'NEXT_PUBLIC_PHOENIX_DEV_WORKSPACE_ID is not set for this real-dev deployment.' };
   }
-  if (config.mode === 'production-auth' || config.mode === 'vercel-supabase-preview') {
+  if (config.mode === 'production-auth') {
+    try {
+      const { realGetMyWorkspaces } = await import('./real-api-client.server');
+      const result = await realGetMyWorkspaces();
+      return result.items[0]
+        ? { workspaceId: result.items[0].workspaceId }
+        : { workspaceId: null, reason: 'The authenticated identity has no Active Phoenix workspace membership.' };
+    } catch (error) {
+      return { workspaceId: null, error };
+    }
+  }
+  if (config.mode === 'vercel-supabase-preview') {
     return config.productionWorkspaceId
       ? { workspaceId: config.productionWorkspaceId }
       : {
@@ -191,14 +202,19 @@ function errorToLiveResult<T>(err: unknown, mode: PlatformDataMode): LiveResult<
     if (err.code === 'PERMISSION_DENIED') return { status: 'permission-denied', mode, message: err.message };
     if (err.code === 'NOT_FOUND') return { status: 'not-found', mode, message: err.message };
     // BACKEND_UNAVAILABLE, DB_UNAVAILABLE, VALIDATION_ERROR, CONFLICT,
-    // BACKEND_ERROR, NOT_IMPLEMENTED — all surfaced as a generic
-    // "backend unavailable"-shaped state; the message carries specifics.
-    return { status: 'backend-unavailable', mode, message: err.message };
+    // BACKEND_ERROR, NOT_IMPLEMENTED — all surfaced as a privacy-safe
+    // generic state. Raw provider/DB errors can contain hostnames, tenant
+    // identifiers, SQL fragments, or other infrastructure details.
+    return {
+      status: 'backend-unavailable',
+      mode,
+      message: 'Live Phoenix data is temporarily unavailable. Please try again later.',
+    };
   }
   return {
     status: 'backend-unavailable',
     mode,
-    message: err instanceof Error ? err.message : 'Unknown error contacting the backend.',
+    message: 'Live Phoenix data is temporarily unavailable. Please try again later.',
   };
 }
 
@@ -233,7 +249,8 @@ export async function loadDashboardData(): Promise<LiveResult<LiveDashboardData>
   if (config.mode === 'mock') return mockResult(config.mode);
   if (config.mode === 'real-disabled') return notWiredResult(config.mode);
 
-  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  const { workspaceId, reason, error } = await resolveLiveWorkspaceId();
+  if (error) return errorToLiveResult(error, config.mode);
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {
@@ -275,7 +292,8 @@ export async function loadAssessmentsListData(): Promise<LiveResult<LiveAssessme
   if (config.mode === 'mock') return mockResult(config.mode);
   if (config.mode === 'real-disabled') return notWiredResult(config.mode);
 
-  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  const { workspaceId, reason, error } = await resolveLiveWorkspaceId();
+  if (error) return errorToLiveResult(error, config.mode);
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {
@@ -404,7 +422,8 @@ export async function loadSettingsActivityAuditData(): Promise<LiveResult<LiveSe
   if (config.mode === 'mock') return mockResult(config.mode);
   if (config.mode === 'real-disabled') return notWiredResult(config.mode);
 
-  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  const { workspaceId, reason, error } = await resolveLiveWorkspaceId();
+  if (error) return errorToLiveResult(error, config.mode);
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {
@@ -454,7 +473,8 @@ export async function loadPassportsListData(): Promise<LiveResult<LivePassportsL
   const config = getPhoenixApiConfig();
   if (config.mode !== 'vercel-supabase-preview') return mockResult(config.mode);
 
-  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  const { workspaceId, reason, error } = await resolveLiveWorkspaceId();
+  if (error) return errorToLiveResult(error, config.mode);
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {
@@ -500,7 +520,8 @@ export async function loadCertificationsListData(): Promise<LiveResult<LiveCerti
   const config = getPhoenixApiConfig();
   if (config.mode !== 'vercel-supabase-preview') return mockResult(config.mode);
 
-  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  const { workspaceId, reason, error } = await resolveLiveWorkspaceId();
+  if (error) return errorToLiveResult(error, config.mode);
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {
@@ -539,7 +560,8 @@ export async function loadReportsListData(): Promise<LiveResult<LiveReportsListD
   if (config.mode === 'mock') return mockResult(config.mode);
   if (config.mode === 'real-disabled') return notWiredResult(config.mode);
 
-  const { workspaceId, reason } = resolveLiveWorkspaceId();
+  const { workspaceId, reason, error } = await resolveLiveWorkspaceId();
+  if (error) return errorToLiveResult(error, config.mode);
   if (!workspaceId) return { status: 'config-missing', mode: config.mode, message: reason };
 
   try {

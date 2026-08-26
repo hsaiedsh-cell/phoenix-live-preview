@@ -41,6 +41,8 @@ export default async function LoginPage({
   if (apiConfig.mode === 'production-auth' || apiConfig.mode === 'vercel-supabase-preview') {
     const redirectUrl = safeRedirectUrl((await searchParams).redirect_url);
     const configuredSignInUrl = process.env.NEXT_PUBLIC_CLERK_SIGN_IN_URL;
+    // Production uses Clerk Account Portal so authentication happens on
+    // accounts.phoenixops.ai and returns to the originating Phoenix host.
     if (configuredSignInUrl?.startsWith('https://')) {
       const requestHeaders = await headers();
       const host = requestHeaders.get('x-forwarded-host') ?? requestHeaders.get('host');

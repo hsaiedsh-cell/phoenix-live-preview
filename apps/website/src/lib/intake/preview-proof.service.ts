@@ -36,7 +36,16 @@ export async function getPreviewProofs(requestId:string, customerUserId?:string)
     intakeQuery<ProofRow>(`SELECT * FROM public_intake_preview_proofs WHERE request_id=$1 AND status IN ('ready','superseded') ORDER BY version DESC`,[requestId]),
     intakeQuery<DecisionRow>(`SELECT * FROM public_intake_preview_decisions WHERE request_id=$1 ORDER BY created_at ASC`,[requestId]),
   ]);
-  return {proofs:await Promise.all(proofs.map(async p=>({previewProofId:p.id,version:p.version,filename:p.original_filename,contentType:p.content_type,sizeBytes:Number(p.size_bytes),status:p.status,createdAt:p.created_at.toISOString(),downloadUrl:await getStorageAdapter().createSignedDownloadUrl(p.storage_object_key,600)}))),decisions:decisions.map(d=>({decisionId:d.id,previewProofId:d.preview_proof_id,decision:d.decision,reason:d.reason,createdAt:d.created_at.toISOString()}))};
+  return {proofs:await Promise.all(proofs.map(async p=>({previewProofId:p.id,version:p.version,filename:p.original_filename,contentType:p.content_type,sizeBytes:Number(p.size_bytes),status:p.status,createdAt:p.created_at.toISOString(),...(customerUserId ? {} : {downloadUrl:await getStorageAdapter().createSignedDownloadUrl(p.storage_object_key,600)})}))),decisions:decisions.map(d=>({decisionId:d.id,previewProofId:d.preview_proof_id,decision:d.decision,reason:d.reason,createdAt:d.created_at.toISOString()}))};
+}
+
+export async function getPreviewProofDownload(requestId:string,previewProofId:string,customerUserId:string) {
+  if (!(await customerCanAccessRequest(requestId,customerUserId))) return null;
+  const rows=await intakeQuery<ProofRow>(`SELECT * FROM public_intake_preview_proofs WHERE id=$1 AND request_id=$2 AND status IN ('ready','superseded') LIMIT 1`,[previewProofId,requestId]);
+  const row=rows[0];
+  if(!row) return null;
+  const ttlSeconds=600;
+  return {downloadUrl:await getStorageAdapter().createSignedDownloadUrl(row.storage_object_key,ttlSeconds),expiresAt:new Date(Date.now()+ttlSeconds*1000).toISOString()};
 }
 
 export async function decidePreview(input:{requestId:string;previewProofId:string;customerUserId:string;decision:'approved'|'revision_requested';reason?:string}) {

@@ -50,6 +50,15 @@ customerPortalRouter.get('/customer/intake-requests/:requestId', asyncHandler(as
   res.status(200).json(success(result.data, getRequestId(res)));
 }));
 
+customerPortalRouter.get('/customer/intake-requests/:requestId/preview-proofs/:previewProofId/download',asyncHandler(async(req,res)=>{
+  const actor=await requireAuthenticatedPhoenixUser(req,res);if(!actor)return;
+  const params=z.object({requestId:z.string().uuid(),previewProofId:z.string().uuid()}).strict().safeParse(req.params);
+  if(!params.success)return sendValidationError(res,formatZodIssues(params.error));
+  const result=await client.customerPreviewProofDownload(params.data.requestId,params.data.previewProofId,actor.id,getRequestId(res));
+  if(!result.ok)return writeCustomerServiceFailure(res,result);
+  res.status(200).json(success(result.data,getRequestId(res)));
+}));
+
 customerPortalRouter.get('/customer/intake-requests/:requestId/final-deliverables/:finalDeliverableId/download',asyncHandler(async(req,res)=>{
   const actor=await requireAuthenticatedPhoenixUser(req,res);if(!actor)return;
   const params=z.object({requestId:z.string().uuid(),finalDeliverableId:z.string().uuid()}).strict().safeParse(req.params);

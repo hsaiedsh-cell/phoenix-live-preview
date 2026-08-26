@@ -8,7 +8,7 @@ export default async function CustomerPortalLayout({ children }: { children: Rea
       <div className="max-w-md rounded-2xl border bg-white p-8 text-center shadow-sm">
         <h1 className="text-xl font-extrabold text-phx-navy">Sign in to your Phoenix portal</h1>
         <p className="mt-2 text-sm text-gray-500">Access your requests, quotations, approvals, and project messages securely.</p>
-        <Link href="/login?redirect_url=%2Fcustomer" className="mt-6 inline-flex rounded-lg bg-phx-cyan px-5 py-3 text-sm font-semibold text-white">Sign in</Link>
+        <a href="/login?redirect_url=%2Fcustomer" className="mt-6 inline-flex rounded-lg bg-phx-cyan px-5 py-3 text-sm font-semibold text-white">Sign in</a>
       </div>
     </div>;
   }
